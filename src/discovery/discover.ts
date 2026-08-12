@@ -1,4 +1,5 @@
 import type { MediaProvider, MediaCandidate, SearchRequest } from "../media-providers/types.js";
+import { runPool } from "../scheduler/pool.js";
 
 export interface DiscoveryResult {
   candidates: MediaCandidate[];
@@ -11,30 +12,30 @@ export async function discoverCandidates(
   request: SearchRequest,
   concurrency = 6,
 ): Promise<DiscoveryResult> {
+  const results = await runPool(
+    providers,
+    () => Math.min(Math.max(1, concurrency), providers.length),
+    async (provider) => {
+      if (!(await provider.isAvailable()))
+        return { provider: provider.id, unavailable: true as const };
+      return { provider: provider.id, candidates: await provider.search(request) };
+    },
+  );
   const candidates: MediaCandidate[] = [];
   const failures: DiscoveryResult["failures"] = [];
   const unavailable: string[] = [];
-  let cursor = 0;
-  const worker = async () => {
-    while (cursor < providers.length) {
-      const provider = providers[cursor++] as MediaProvider;
-      try {
-        if (!(await provider.isAvailable())) {
-          unavailable.push(provider.id);
-          continue;
-        }
-        candidates.push(...(await provider.search(request)));
-      } catch (error) {
-        failures.push({
-          provider: provider.id,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
+  for (const [index, result] of results.entries()) {
+    if (result.status === "rejected") {
+      failures.push({
+        provider: providers[index]!.id,
+        error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+      });
+    } else if ("unavailable" in result.value) {
+      unavailable.push(result.value.provider);
+    } else {
+      candidates.push(...result.value.candidates);
     }
-  };
-  await Promise.all(
-    Array.from({ length: Math.min(Math.max(1, concurrency), providers.length) }, worker),
-  );
+  }
   return {
     candidates: candidates.sort(
       (left, right) =>

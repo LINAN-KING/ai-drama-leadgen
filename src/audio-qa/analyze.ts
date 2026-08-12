@@ -19,34 +19,34 @@ export async function analyzeAudio(
   targetLufs = -16,
   tolerance = 2,
 ): Promise<AudioQaReport> {
-  const loudness = await runBinary("ffmpeg", [
-    "-hide_banner",
-    "-nostats",
-    "-i",
-    filePath,
-    "-filter_complex",
-    "ebur128=peak=true",
-    "-f",
-    "null",
-    "-",
+  const [loudness, silence] = await Promise.all([
+    runBinary("ffmpeg", [
+      "-hide_banner",
+      "-nostats",
+      "-i",
+      filePath,
+      "-filter_complex",
+      "ebur128=peak=true",
+      "-f",
+      "null",
+      "-",
+    ]),
+    runBinary("ffmpeg", [
+      "-hide_banner",
+      "-nostats",
+      "-i",
+      filePath,
+      "-af",
+      "silencedetect=n=-45dB:d=0.3",
+      "-f",
+      "null",
+      "-",
+    ]),
   ]);
-  const silence = await runBinary("ffmpeg", [
-    "-hide_banner",
-    "-nostats",
-    "-i",
-    filePath,
-    "-af",
-    "silencedetect=n=-45dB:d=0.3",
-    "-f",
-    "null",
-    "-",
-  ]);
-  const duration = lastNumber(loudness.stderr, /Duration: (\d+):(\d+):([\d.]+)/g);
   const durationMatch = loudness.stderr.match(/Duration: (\d+):(\d+):([\d.]+)/);
   const durationSeconds = durationMatch
     ? Number(durationMatch[1]) * 3600 + Number(durationMatch[2]) * 60 + Number(durationMatch[3])
     : 0;
-  void duration;
   const integratedLufs = lastNumber(loudness.stderr, /I:\s+(-?[\d.]+) LUFS/g);
   const truePeakDbtp = lastNumber(loudness.stderr, /Peak:\s+(-?[\d.]+) dBFS/g);
   const silentSeconds = [...silence.stderr.matchAll(/silence_duration: ([\d.]+)/g)].reduce(

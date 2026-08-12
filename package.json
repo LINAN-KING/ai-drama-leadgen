@@ -19,10 +19,11 @@
     "DESIGN.md",
     "SCENE-SYSTEM.md",
     "CONTENT-LIBRARY.md",
+    "README.md",
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "node scripts/clean.mjs && tsc -p tsconfig.build.json",
     "check": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",

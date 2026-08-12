@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, rename, rm, writeFile } from "node:fs/promises";
+import { createWriteStream } from "node:fs";
+import { mkdir, rename, rm, stat } from "node:fs/promises";
 import path from "node:path";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { runBinary } from "../ffmpeg/process.js";
 
 export async function downloadMedia(url: string, outputPath: string, timeoutMs = 120_000) {
@@ -17,11 +20,14 @@ export async function downloadMedia(url: string, outputPath: string, timeoutMs =
       const response = await fetch(url, { signal: controller.signal });
       if (!response.ok)
         throw new Error(`Media download failed: ${response.status} ${response.statusText}`);
-      const bytes = new Uint8Array(await response.arrayBuffer());
-      if (!bytes.length) throw new Error("Media download returned an empty file");
-      await writeFile(temporary, bytes);
+      if (!response.body) throw new Error("Media download returned an empty body");
+      const body = response.body as Parameters<typeof Readable.fromWeb>[0];
+      await pipeline(Readable.fromWeb(body), createWriteStream(temporary, { flags: "wx" }));
     } catch (error) {
-      if (process.platform !== "win32" || controller.signal.aborted) throw error;
+      if (process.platform !== "win32" || controller.signal.aborted) {
+        await rm(temporary, { force: true });
+        throw error;
+      }
       try {
         await runBinary(
           "curl.exe",
@@ -48,6 +54,10 @@ export async function downloadMedia(url: string, outputPath: string, timeoutMs =
         await rm(temporary, { force: true });
         throw curlError;
       }
+    }
+    if ((await stat(temporary)).size === 0) {
+      await rm(temporary, { force: true });
+      throw new Error("Media download returned an empty file");
     }
     await rename(temporary, outputPath);
     return outputPath;

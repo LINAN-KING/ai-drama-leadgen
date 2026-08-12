@@ -72,10 +72,12 @@ describe("real FFmpeg EDL render", () => {
           },
         ],
       },
-      path.join(root, "work"),
-      audio,
-      subtitle,
-      output,
+      {
+        workDirectory: path.join(root, "work"),
+        audioPath: audio,
+        subtitlePath: subtitle,
+        outputPath: output,
+      },
     );
     const probe = await probeMedia(output);
     expect(probe).toMatchObject({ decodable: true, width: 1080, height: 1080, codec: "h264" });

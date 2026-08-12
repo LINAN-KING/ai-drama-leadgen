@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { AspectRatio } from "../config/schema.js";
+import { writeJson } from "../config/files.js";
 import {
   CANVAS_SIZES,
   WORKBENCH_TEMPLATES,
@@ -89,11 +90,7 @@ export async function writeWorkbenchProject(
   const directory = path.join(outputRoot, plan.id);
   await mkdir(directory, { recursive: true });
   await writeFile(path.join(directory, "index.html"), compileWorkbenchHtml(plan), "utf8");
-  await writeFile(
-    path.join(directory, "scene-plan.json"),
-    `${JSON.stringify(plan, null, 2)}\n`,
-    "utf8",
-  );
+  await writeJson(path.join(directory, "scene-plan.json"), plan);
   return directory;
 }
 

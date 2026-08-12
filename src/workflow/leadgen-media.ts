@@ -8,7 +8,7 @@ import { generateWithQa, GenerationBudget } from "../generation/retry.js";
 import { downloadMedia } from "../media-providers/download.js";
 import type { AssetLibrary, AssetRecord } from "../media-providers/library.js";
 import type { MediaCandidate, MediaProvider } from "../media-providers/types.js";
-import { analyzeMedia } from "../media-qa/analyze.js";
+import { analyzeMedia, type MediaQaPolicy } from "../media-qa/analyze.js";
 import { rankCandidates, rejectAdjacentSimilarity } from "../media-qa/filter.js";
 
 export interface LeadgenDiscovery extends DiscoveryResult {
@@ -23,6 +23,15 @@ export interface LeadgenDiscovery extends DiscoveryResult {
 export interface FrozenMediaAsset extends AssetRecord {
   candidate: MediaCandidate;
 }
+
+const LEADGEN_MEDIA_QA_POLICY: MediaQaPolicy = {
+  minWidth: 720,
+  minHeight: 720,
+  minDurationSeconds: 0.8,
+  maxDurationSeconds: 30,
+  maxBlackRatio: 0.05,
+  maxFreezeRatio: 0.85,
+};
 
 function orientation(config: TaskConfig): "portrait" | "landscape" | "square" {
   return config.aspectRatio === "9:16"
@@ -61,12 +70,11 @@ export async function acquireLeadgenMedia(options: {
       (item) => item.candidate,
     ),
   );
-  const selected: MediaCandidate[] = ranked;
   const gaps: string[] = [];
   const assets: FrozenMediaAsset[] = [];
   const downloads = path.join(options.workspace, "downloads");
   await mkdir(downloads, { recursive: true });
-  for (const candidate of selected) {
+  for (const candidate of ranked) {
     if (assets.length >= required) break;
     const extension = candidate.kind === "video" ? ".mp4" : ".jpg";
     const localPath = path.join(
@@ -76,14 +84,7 @@ export async function acquireLeadgenMedia(options: {
     try {
       if (path.isAbsolute(candidate.downloadUrl)) await copyFile(candidate.downloadUrl, localPath);
       else await downloadMedia(candidate.downloadUrl, localPath);
-      const report = await analyzeMedia(localPath, {
-        minWidth: 720,
-        minHeight: 720,
-        minDurationSeconds: 0.8,
-        maxDurationSeconds: 30,
-        maxBlackRatio: 0.05,
-        maxFreezeRatio: 0.85,
-      });
+      const report = await analyzeMedia(localPath, LEADGEN_MEDIA_QA_POLICY);
       if (!report.passed) {
         gaps.push(`${candidate.id}:${report.hardFailures.join(",")}`);
         continue;
@@ -108,11 +109,7 @@ export async function acquireLeadgenMedia(options: {
       };
       const generated = await generateWithQa(options.agnes, request, budget, async (artifact) => {
         const report = await analyzeMedia(artifact.localPath, {
-          minWidth: 720,
-          minHeight: 720,
-          minDurationSeconds: 0.8,
-          maxDurationSeconds: 30,
-          maxBlackRatio: 0.05,
+          ...LEADGEN_MEDIA_QA_POLICY,
           maxFreezeRatio: 0.8,
         });
         return { passed: report.passed, reason: report.hardFailures.join(", ") };

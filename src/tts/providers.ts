@@ -1,4 +1,4 @@
-import { access, mkdtemp, writeFile } from "node:fs/promises";
+import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { runBinary } from "../ffmpeg/process.js";
@@ -22,24 +22,28 @@ export class MimoProvider implements TtsProvider {
   }
   async synthesize(request: TtsSynthesisRequest): Promise<void> {
     const root = await mkdtemp(path.join(os.tmpdir(), "mimo-tts-"));
-    const textPath = path.join(root, `${request.segment.id}.txt`);
-    await writeFile(textPath, request.segment.text, "utf8");
-    const style = `${request.voiceStyle}中文口播，吐字清晰，语速${request.speed.toFixed(2)}倍。`;
-    await runBinary(
-      "python",
-      [
-        this.scriptPath,
-        "--text-file",
-        textPath,
-        "--out",
-        request.outputPath,
-        "--voice",
-        "冰糖",
-        "--style",
-        style,
-      ],
-      180_000,
-    );
+    try {
+      const textPath = path.join(root, `${request.segment.id}.txt`);
+      await writeFile(textPath, request.segment.text, "utf8");
+      const style = `${request.voiceStyle}中文口播，吐字清晰，语速${request.speed.toFixed(2)}倍。`;
+      await runBinary(
+        "python",
+        [
+          this.scriptPath,
+          "--text-file",
+          textPath,
+          "--out",
+          request.outputPath,
+          "--voice",
+          "冰糖",
+          "--style",
+          style,
+        ],
+        180_000,
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   }
 }
 

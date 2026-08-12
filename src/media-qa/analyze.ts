@@ -51,29 +51,31 @@ export async function analyzeMedia(
   let blackRatio = 0;
   let freezeRatio = 0;
   if (probe.decodable && probe.kind === "video" && probe.durationSeconds > 0) {
-    const black = await runBinary("ffmpeg", [
-      "-hide_banner",
-      "-nostats",
-      "-i",
-      filePath,
-      "-vf",
-      "blackdetect=d=0.1:pix_th=0.02",
-      "-an",
-      "-f",
-      "null",
-      "-",
-    ]);
-    const freeze = await runBinary("ffmpeg", [
-      "-hide_banner",
-      "-nostats",
-      "-i",
-      filePath,
-      "-vf",
-      "freezedetect=n=-50dB:d=0.5",
-      "-an",
-      "-f",
-      "null",
-      "-",
+    const [black, freeze] = await Promise.all([
+      runBinary("ffmpeg", [
+        "-hide_banner",
+        "-nostats",
+        "-i",
+        filePath,
+        "-vf",
+        "blackdetect=d=0.1:pix_th=0.02",
+        "-an",
+        "-f",
+        "null",
+        "-",
+      ]),
+      runBinary("ffmpeg", [
+        "-hide_banner",
+        "-nostats",
+        "-i",
+        filePath,
+        "-vf",
+        "freezedetect=n=-50dB:d=0.5",
+        "-an",
+        "-f",
+        "null",
+        "-",
+      ]),
     ]);
     blackRatio = Math.min(1, sumDetectedDuration(black.stderr, "black") / probe.durationSeconds);
     freezeRatio = Math.min(1, sumDetectedDuration(freeze.stderr, "freeze") / probe.durationSeconds);

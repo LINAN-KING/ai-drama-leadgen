@@ -1,5 +1,4 @@
 import type { AspectRatio } from "../config/schema.js";
-import { runBinary } from "../ffmpeg/process.js";
 import { CANVAS_SIZES } from "../hyperframes/types.js";
 import { analyzeMedia } from "./analyze.js";
 
@@ -27,18 +26,7 @@ export async function analyzeFinalVideo(
     maxBlackRatio: 0.05,
     maxFreezeRatio: 0.5,
   });
-  const { stdout } = await runBinary("ffprobe", [
-    "-v",
-    "error",
-    "-select_streams",
-    "a",
-    "-show_entries",
-    "stream=index",
-    "-of",
-    "csv=p=0",
-    filePath,
-  ]);
-  const hasAudio = Boolean(stdout.trim());
+  const hasAudio = media.probe.hasAudio;
   const size = CANVAS_SIZES[aspectRatio];
   const failures = [...media.hardFailures];
   if (media.probe.width !== size.width || media.probe.height !== size.height)

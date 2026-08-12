@@ -37,6 +37,8 @@ if ($nodeMajor -lt 22) { ($probes | Where-Object id -eq 'node').status = 'missin
 if ($InstallSafeDependencies -and $PSCmdlet.ShouldProcess($repoRoot, 'Install npm dependencies')) {
     & npm install --prefix $repoRoot
     if ($LASTEXITCODE -ne 0) { throw 'npm install failed.' }
+    & npm run build --prefix $repoRoot
+    if ($LASTEXITCODE -ne 0) { throw 'npm build failed.' }
 }
 
 if ($InstallOptionalTools) {

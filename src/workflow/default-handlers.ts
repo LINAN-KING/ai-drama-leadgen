@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { TaskConfig } from "../config/schema.js";
+import { writeJson } from "../config/files.js";
 import { createScriptPlan, type ScriptPlan } from "../script/plan.js";
 import { createProviderCatalog } from "../media-providers/catalog.js";
 import type { MediaProvider } from "../media-providers/types.js";
@@ -44,8 +45,6 @@ import type { NodeHandler, WorkflowNodeId } from "./types.js";
 import { cleanupJobIntermediates } from "./cleanup.js";
 
 const packageRoot = fileURLToPath(new URL("../../", import.meta.url));
-const ttsFailures = new Map<TtsProviderId, number>();
-
 export interface WorkflowDependencies {
   providers?: MediaProvider[];
   agnes?: AgnesClient;
@@ -55,9 +54,7 @@ export interface WorkflowDependencies {
 }
 
 async function json(filePath: string, value: unknown): Promise<string> {
-  await mkdir(path.dirname(filePath), { recursive: true });
-  await writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-  return filePath;
+  return writeJson(filePath, value);
 }
 async function readJson<T>(filePath: string): Promise<T> {
   return JSON.parse(await readFile(filePath, "utf8")) as T;
@@ -111,6 +108,7 @@ export function createDefaultHandlers(
     mimo: new MimoProvider(),
   };
   const transcribe = dependencies.transcribe ?? transcribeWithWhisper;
+  const ttsFailures = new Map<TtsProviderId, number>();
   return {
     configure: async ({ workspace }) => ({
       outputFiles: [await json(file(workspace, "config.json"), config)],
@@ -380,13 +378,12 @@ export function createDefaultHandlers(
       }
       const edl = await readJson<EditDecisionList>(file(workspace, "edit-decision.json"));
       const output = file(workspace, "final-leadgen-video.mp4");
-      await renderEdl(
-        edl,
-        file(workspace, "render-work"),
-        file(workspace, "final-mix.wav"),
-        file(workspace, "subtitle.ass"),
-        output,
-      );
+      await renderEdl(edl, {
+        workDirectory: file(workspace, "render-work"),
+        audioPath: file(workspace, "final-mix.wav"),
+        subtitlePath: file(workspace, "subtitle.ass"),
+        outputPath: output,
+      });
       return { outputFiles: [output] };
     },
     qa: async ({ workspace }) => {

@@ -26,6 +26,7 @@ export interface MediaProbe {
   frameRate: number;
   sizeBytes: number;
   format: string | null;
+  hasAudio: boolean;
 }
 
 function parseRate(value?: string): number {
@@ -62,6 +63,7 @@ export async function probeMedia(filePath: string): Promise<MediaProbe> {
       frameRate: parseRate(stream.avg_frame_rate),
       sizeBytes: Number(parsed.format?.size ?? 0),
       format: parsed.format?.format_name ?? null,
+      hasAudio: parsed.streams?.some((item) => item.codec_type === "audio") ?? false,
     };
   } catch {
     return {
@@ -75,6 +77,7 @@ export async function probeMedia(filePath: string): Promise<MediaProbe> {
       frameRate: 0,
       sizeBytes: 0,
       format: null,
+      hasAudio: false,
     };
   }
 }
