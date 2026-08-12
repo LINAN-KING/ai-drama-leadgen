@@ -43,6 +43,22 @@ const COMMANDS = [
   { id: "ffmpeg", label: "FFmpeg", command: "ffmpeg", args: ["-version"], required: true },
   { id: "ffprobe", label: "FFprobe", command: "ffprobe", args: ["-version"], required: true },
   { id: "python", label: "Python", command: "python", args: ["--version"], required: false },
+  { id: "edge-tts", label: "Edge TTS", command: "edge-tts", args: ["--version"], required: false },
+  { id: "whisper", label: "Whisper", command: "whisper", args: ["--help"], required: false },
+  {
+    id: "agent-reach",
+    label: "Agent Reach",
+    command: "agent-reach",
+    args: ["--help"],
+    required: false,
+  },
+  {
+    id: "crawl4ai",
+    label: "Crawl4AI",
+    command: "crawl4ai-doctor",
+    args: ["--help"],
+    required: false,
+  },
 ] as const;
 
 async function inspectCommand(spec: (typeof COMMANDS)[number]): Promise<CapabilityResult> {

@@ -1,6 +1,7 @@
 [CmdletBinding(SupportsShouldProcess)]
 param(
     [switch]$InstallSafeDependencies,
+    [switch]$InstallOptionalTools,
     [switch]$InstallAdapters,
     [string]$ReportPath = (Join-Path $PWD 'doctor-report.json')
 )
@@ -38,6 +39,27 @@ if ($InstallSafeDependencies -and $PSCmdlet.ShouldProcess($repoRoot, 'Install np
     if ($LASTEXITCODE -ne 0) { throw 'npm install failed.' }
 }
 
+if ($InstallOptionalTools) {
+    $optionalInstalls = @(
+        [ordered]@{ name = 'edge-tts'; command = 'python'; arguments = @('-m','pip','install','--user','edge-tts') }
+        [ordered]@{ name = 'whisper'; command = 'python'; arguments = @('-m','pip','install','--user','openai-whisper') }
+        [ordered]@{ name = 'crawl4ai'; command = 'python'; arguments = @('-m','pip','install','--user','crawl4ai') }
+    )
+    foreach ($install in $optionalInstalls) {
+        if (-not (Get-Command $install.name -ErrorAction SilentlyContinue) -and $PSCmdlet.ShouldProcess($install.name, 'Install optional user-level dependency')) {
+            & $install.command @($install.arguments)
+            if ($LASTEXITCODE -ne 0) { throw "Failed to install $($install.name)." }
+        }
+    }
+    if (-not (Get-Command agent-reach -ErrorAction SilentlyContinue)) {
+        Write-Warning 'Agent Reach is optional and requires its official installer; see https://github.com/Panniantong/Agent-Reach.'
+    }
+    if ($PSCmdlet.ShouldProcess($repoRoot, 'Install Playwright Chromium')) {
+        & npx --prefix $repoRoot playwright install chromium
+        if ($LASTEXITCODE -ne 0) { throw 'Playwright Chromium installation failed.' }
+    }
+}
+
 $adapterRoots = [ordered]@{
     codex = Join-Path $env:USERPROFILE '.codex\skills'
     trae = Join-Path $env:USERPROFILE '.trae\skills'
@@ -50,11 +72,16 @@ $installedAdapters = @()
 if ($InstallAdapters) {
     foreach ($entry in $adapterRoots.GetEnumerator()) {
         $source = Join-Path $repoRoot "adapters\$($entry.Key)\SKILL.md"
-        if ((Test-Path -LiteralPath $entry.Value) -and (Test-Path -LiteralPath $source)) {
+        if (Test-Path -LiteralPath $source) {
             $target = Join-Path $entry.Value 'ai-drama-leadgen'
             if ($PSCmdlet.ShouldProcess($target, "Install $($entry.Key) adapter")) {
                 New-Item -ItemType Directory -Path $target -Force | Out-Null
-                Copy-Item -LiteralPath $source -Destination (Join-Path $target 'SKILL.md') -Force
+                $adapter = (Get-Content -LiteralPath $source -Raw).Replace('{{REPO_ROOT}}', $repoRoot)
+                Set-Content -LiteralPath (Join-Path $target 'SKILL.md') -Value $adapter -Encoding utf8
+                [ordered]@{
+                    repository = $repoRoot
+                    command = "node `"$(Join-Path $repoRoot 'dist\cli\index.js')`""
+                } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $target 'COMMAND.json') -Encoding utf8
                 $installedAdapters += $entry.Key
             }
         }

@@ -18,24 +18,23 @@ export async function transcribeWithWhisper(
   audioPath: string,
   outputDirectory: string,
   model = "small",
+  initialPrompt?: string,
 ): Promise<TranscriptWord[]> {
-  await runBinary(
-    "whisper",
-    [
-      audioPath,
-      "--model",
-      model,
-      "--language",
-      "zh",
-      "--word_timestamps",
-      "True",
-      "--output_format",
-      "json",
-      "--output_dir",
-      outputDirectory,
-    ],
-    600_000,
-  );
+  const args = [
+    audioPath,
+    "--model",
+    model,
+    "--language",
+    "zh",
+    "--word_timestamps",
+    "True",
+    "--output_format",
+    "json",
+    "--output_dir",
+    outputDirectory,
+  ];
+  if (initialPrompt) args.push("--initial_prompt", initialPrompt);
+  await runBinary("whisper", args, 600_000);
   const base = pathBase(audioPath);
   const parsed = JSON.parse(
     await readFile(`${outputDirectory}/${base}.json`, "utf8"),

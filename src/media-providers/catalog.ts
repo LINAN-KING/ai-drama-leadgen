@@ -1,6 +1,7 @@
 import type { MediaProvider, ProviderTier, SearchRequest, MediaCandidate } from "./types.js";
 import { PexelsProvider } from "./pexels.js";
 import { PixabayProvider } from "./pixabay.js";
+import { WikimediaProvider } from "./wikimedia.js";
 
 export interface ProviderDescriptor {
   id: string;
@@ -65,6 +66,7 @@ export function createProviderCatalog(): MediaProvider[] {
   return PROVIDER_CATALOG.map((item) => {
     if (item.id === "pexels") return new PexelsProvider();
     if (item.id === "pixabay") return new PixabayProvider();
+    if (item.id === "wikimedia") return new WikimediaProvider();
     return new UnconfiguredProvider(item.id, item.tier, item.credential);
   });
 }

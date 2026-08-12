@@ -29,18 +29,23 @@ export async function normalizeShot(
     options.focus,
   );
   const setpts = `setpts=(PTS-STARTPTS)/${options.speed}`;
+  const input =
+    probe.kind === "image"
+      ? ["-loop", "1", "-framerate", "30", "-i", sourcePath]
+      : ["-ss", String(options.sourceStart), "-i", sourcePath];
+  const motion =
+    probe.kind === "image"
+      ? `,zoompan=z='min(zoom+0.0008,1.08)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${Math.ceil(options.duration * 30)}:s=${options.width}x${options.height}:fps=30`
+      : "";
   await runBinary(
     "ffmpeg",
     [
       "-y",
-      "-ss",
-      String(options.sourceStart),
-      "-i",
-      sourcePath,
+      ...input,
       "-t",
       String(options.duration * options.speed),
       "-vf",
-      `${crop},scale=${options.width}:${options.height}:flags=lanczos,${setpts},fps=30,format=yuv420p`,
+      `${crop},scale=${options.width}:${options.height}:flags=lanczos${motion},${setpts},fps=30,format=yuv420p`,
       "-an",
       "-c:v",
       "libx264",
@@ -94,7 +99,7 @@ export async function renderEdl(
   const args = ["-y", "-i", silentVideo];
   if (audioPath) args.push("-i", audioPath);
   const subtitleFilter = subtitlePath
-    ? `subtitles='${subtitlePath.replaceAll("\\", "/").replaceAll(":", "\\:").replaceAll("'", "\\'")}':force_style='Alignment=2,MarginV=${Math.round(size.height * 0.22)},FontName=Microsoft YaHei,FontSize=${edl.aspectRatio === "9:16" ? 18 : 24},PrimaryColour=&H0000FFFF,OutlineColour=&H0011100F,BorderStyle=1,Outline=2,Shadow=0'`
+    ? `subtitles='${subtitlePath.replaceAll("\\", "/").replaceAll(":", "\\:").replaceAll("'", "\\'")}'`
     : null;
   args.push(
     ...(subtitleFilter ? ["-vf", subtitleFilter] : []),
