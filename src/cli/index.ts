@@ -4,6 +4,7 @@ import { runDoctor } from "./commands/doctor.js";
 import { runConfigure } from "./commands/configure.js";
 import { runValidate } from "./commands/validate.js";
 import { runScaffold } from "./commands/scaffold.js";
+import { runBatchCommand, runGenerate, runResume } from "./commands/workflow.js";
 
 const program = new Command()
   .name("drama-leadgen")
@@ -39,15 +40,30 @@ program
   .option("--seed <number>", "deterministic seed", (value) => Number.parseInt(value, 10), 20260813)
   .action(async ({ output, seed }: { output: string; seed: number }) => runScaffold(output, seed));
 
-for (const name of ["generate", "batch", "resume"] as const) {
-  program
-    .command(name)
-    .description(`${name} workflow`)
-    .allowUnknownOption(false)
-    .action(() => {
-      throw new Error(`${name} is unavailable until the generation pipeline is initialized`);
-    });
-}
+program
+  .command("generate")
+  .description("Generate one video in an isolated resumable workspace")
+  .requiredOption("-c, --config <path>")
+  .option("-w, --workspace <path>", "workspace", "workspaces/generate")
+  .action(({ config, workspace }: { config: string; workspace: string }) =>
+    runGenerate(config, workspace),
+  );
+program
+  .command("batch")
+  .description("Generate the configured number of QA-passing videos")
+  .requiredOption("-c, --config <path>")
+  .option("-w, --workspace <path>", "workspace", "workspaces/batch")
+  .action(({ config, workspace }: { config: string; workspace: string }) =>
+    runBatchCommand(config, workspace),
+  );
+program
+  .command("resume")
+  .description("Resume failed or invalidated nodes in a workspace")
+  .requiredOption("-c, --config <path>")
+  .requiredOption("-w, --workspace <path>")
+  .action(({ config, workspace }: { config: string; workspace: string }) =>
+    runResume(config, workspace),
+  );
 
 program.parseAsync().catch((error: unknown) => {
   const message = error instanceof Error ? error.message : String(error);

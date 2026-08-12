@@ -5,6 +5,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { writeJson } from "../../config/files.js";
 import type { CapabilityResult } from "../../reporting/result.js";
+import { hasWindowsCredential } from "../../config/windows-credentials.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -84,6 +85,19 @@ function inspectCredential(id: string, label: string, variables: string[]): Capa
   };
 }
 
+async function inspectMimoCredential(): Promise<CapabilityResult> {
+  if (process.env.MIMO_API_KEY) return inspectCredential("mimo", "MiMo TTS", ["MIMO_API_KEY"]);
+  const found = await hasWindowsCredential("ai-commerce-mimo-tts");
+  return {
+    id: "mimo",
+    label: "MiMo TTS",
+    status: found ? "available" : "manual-action",
+    detail: found
+      ? "Credential detected in Windows Credential Manager"
+      : "Store target ai-commerce-mimo-tts or set MIMO_API_KEY to enable",
+  };
+}
+
 async function detectChrome(): Promise<CapabilityResult> {
   const candidates =
     process.platform === "win32"
@@ -140,7 +154,7 @@ export async function collectDoctorReport(cwd = process.cwd()): Promise<DoctorRe
     inspectCredential("free-media", "Free media providers", ["PIXABAY_API_KEY", "PEXELS_API_KEY"]),
   );
   capabilities.push(inspectCredential("agnes", "Agnes generation", ["AGNES_API_KEY"]));
-  capabilities.push(inspectCredential("mimo", "MiMo TTS", ["MIMO_API_KEY"]));
+  capabilities.push(await inspectMimoCredential());
   capabilities.push(inspectCredential("freesound", "Freesound effects", ["FREESOUND_API_KEY"]));
   capabilities.push(
     inspectCredential("firecrawl", "Firecrawl", ["FIRECRAWL_API_KEY", "FIRECRAWL_URL"]),

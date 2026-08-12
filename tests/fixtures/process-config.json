@@ -1,0 +1,31 @@
+{
+  "mode": "process",
+  "topic": "AI 漫剧获客",
+  "workflow": "提示词生成分镜，再锁定角色、场景和动态镜头",
+  "platform": "抖音",
+  "aspectRatio": "9:16",
+  "targetDurationSeconds": 10,
+  "audience": "learners",
+  "ctaKind": "comment-keyword",
+  "ctaText": "评论漫剧领取流程清单",
+  "count": 1,
+  "concurrency": {
+    "jobs": 1,
+    "search": 6,
+    "download": 4,
+    "agnes": 2,
+    "qa": 3,
+    "render": 1,
+    "hyperframesWorkers": 2
+  },
+  "captions": "phrase",
+  "edgeRatio": 1,
+  "mimoRatio": 0,
+  "voiceStyle": "professional",
+  "theme": "cinematic-workbench",
+  "skin": "obsidian-coral",
+  "style": "technical-cinematic",
+  "motionIntensity": 0.7,
+  "seed": 20260813,
+  "confirmed": true
+}

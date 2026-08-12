@@ -57,7 +57,7 @@ export async function analyzeMedia(
       "-i",
       filePath,
       "-vf",
-      "blackdetect=d=0.1:pix_th=0.10",
+      "blackdetect=d=0.1:pix_th=0.02",
       "-an",
       "-f",
       "null",

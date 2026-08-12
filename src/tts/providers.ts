@@ -2,6 +2,7 @@ import { access, mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { runBinary } from "../ffmpeg/process.js";
+import { hasWindowsCredential } from "../config/windows-credentials.js";
 import type { TtsProvider, TtsSynthesisRequest } from "./types.js";
 
 export class MimoProvider implements TtsProvider {
@@ -12,7 +13,9 @@ export class MimoProvider implements TtsProvider {
   async isAvailable(): Promise<boolean> {
     try {
       await access(this.scriptPath);
-      return Boolean(process.env.MIMO_API_KEY);
+      return (
+        Boolean(process.env.MIMO_API_KEY) || (await hasWindowsCredential("ai-commerce-mimo-tts"))
+      );
     } catch {
       return false;
     }

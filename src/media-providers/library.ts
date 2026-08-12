@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
-import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { copyFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { MediaCandidate } from "./types.js";
 import { evaluateCandidate } from "../media-qa/filter.js";
@@ -27,6 +27,7 @@ interface LibraryIndex {
 export class AssetLibrary {
   private readonly indexPath: string;
   private readonly originalsPath: string;
+  private mutationQueue: Promise<void> = Promise.resolve();
 
   constructor(private readonly root: string) {
     this.indexPath = path.join(root, "index.json");
@@ -44,9 +45,21 @@ export class AssetLibrary {
 
   private async writeIndex(index: LibraryIndex): Promise<void> {
     await mkdir(this.root, { recursive: true });
-    const temporary = `${this.indexPath}.${process.pid}.tmp`;
+    const temporary = `${this.indexPath}.${process.pid}.${randomUUID()}.tmp`;
     await writeFile(temporary, `${JSON.stringify(index, null, 2)}\n`, "utf8");
-    await import("node:fs/promises").then(({ rename }) => rename(temporary, this.indexPath));
+    await rename(temporary, this.indexPath);
+  }
+
+  private async mutateIndex<T>(mutation: (index: LibraryIndex) => T | Promise<T>): Promise<T> {
+    let result!: T;
+    const apply = async () => {
+      const index = await this.readIndex();
+      result = await mutation(index);
+      await this.writeIndex(index);
+    };
+    this.mutationQueue = this.mutationQueue.then(apply, apply);
+    await this.mutationQueue;
+    return result;
   }
 
   async importOriginal(candidate: MediaCandidate, sourcePath: string): Promise<AssetRecord> {
@@ -64,38 +77,39 @@ export class AssetLibrary {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
     }
-    const index = await this.readIndex();
-    const existing = index.assets[candidate.id];
-    const record: AssetRecord = {
-      mediaId: candidate.id,
-      sha256,
-      originalPath,
-      sourceUrl: candidate.sourceUrl,
-      author: candidate.author,
-      provider: candidate.provider,
-      license: candidate.license!,
-      downloadedAt: existing?.downloadedAt ?? new Date().toISOString(),
-      width: candidate.width,
-      height: candidate.height,
-      durationSeconds: candidate.durationSeconds,
-      qualityScore: decision.score,
-      useCount: existing?.useCount ?? 0,
-    };
-    index.assets[candidate.id] = record;
-    await this.writeIndex(index);
-    return record;
+    return this.mutateIndex((index) => {
+      const existing = index.assets[candidate.id];
+      const record: AssetRecord = {
+        mediaId: candidate.id,
+        sha256,
+        originalPath,
+        sourceUrl: candidate.sourceUrl,
+        author: candidate.author,
+        provider: candidate.provider,
+        license: candidate.license!,
+        downloadedAt: existing?.downloadedAt ?? new Date().toISOString(),
+        width: candidate.width,
+        height: candidate.height,
+        durationSeconds: candidate.durationSeconds,
+        qualityScore: decision.score,
+        useCount: existing?.useCount ?? 0,
+      };
+      index.assets[candidate.id] = record;
+      return record;
+    });
   }
 
   async incrementUse(mediaId: string): Promise<AssetRecord> {
-    const index = await this.readIndex();
-    const record = index.assets[mediaId];
-    if (!record) throw new Error(`Unknown media asset: ${mediaId}`);
-    record.useCount += 1;
-    await this.writeIndex(index);
-    return record;
+    return this.mutateIndex((index) => {
+      const record = index.assets[mediaId];
+      if (!record) throw new Error(`Unknown media asset: ${mediaId}`);
+      record.useCount += 1;
+      return record;
+    });
   }
 
   async usageMap(): Promise<Map<string, number>> {
+    await this.mutationQueue;
     const index = await this.readIndex();
     return new Map(Object.values(index.assets).map((record) => [record.mediaId, record.useCount]));
   }

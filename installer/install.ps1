@@ -62,7 +62,16 @@ if ($InstallAdapters) {
 }
 
 $credentialNames = @('PIXABAY_API_KEY','PEXELS_API_KEY','AGNES_API_KEY','MIMO_API_KEY','FREESOUND_API_KEY','FIRECRAWL_API_KEY')
-$credentials = foreach ($name in $credentialNames) { [ordered]@{ name = $name; configured = [bool][Environment]::GetEnvironmentVariable($name) } }
+$credentialTargets = (& cmdkey /list 2>$null) -join "`n"
+$credentials = foreach ($name in $credentialNames) {
+    $configured = [bool][Environment]::GetEnvironmentVariable($name)
+    $source = if ($configured) { 'environment' } else { $null }
+    if ($name -eq 'MIMO_API_KEY' -and $credentialTargets -match 'target=ai-commerce-mimo-tts') {
+        $configured = $true
+        $source = 'windows-credential-manager'
+    }
+    [ordered]@{ name = $name; configured = $configured; source = $source }
+}
 $drive = Get-PSDrive -Name ([IO.Path]::GetPathRoot($repoRoot).TrimEnd('\').TrimEnd(':'))
 $report = [ordered]@{
     generatedAt = [DateTimeOffset]::UtcNow.ToString('o')
