@@ -1,0 +1,38 @@
+{
+  "id": "character-16x9",
+  "template": "character",
+  "aspectRatio": "16:9",
+  "width": 1920,
+  "height": 1080,
+  "duration": 10,
+  "seed": 20260813,
+  "content": {
+    "title": "角色定稿",
+    "input": "冷静、克制、银甲、旧伤、东方女性",
+    "processing": "锁定五官 / 服装 / 色彩 / 表情",
+    "result": "角色三视图与表情组",
+    "focus": "跨镜头身份一致性"
+  },
+  "stages": [
+    {
+      "id": "input",
+      "start": 0.2
+    },
+    {
+      "id": "processing",
+      "start": 1.7
+    },
+    {
+      "id": "result",
+      "start": 4.1
+    },
+    {
+      "id": "focus",
+      "start": 6.2
+    },
+    {
+      "id": "complete",
+      "start": 8.1
+    }
+  ]
+}

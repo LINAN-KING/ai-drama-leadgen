@@ -1,0 +1,38 @@
+{
+  "id": "video-9x16",
+  "template": "video",
+  "aspectRatio": "9:16",
+  "width": 1080,
+  "height": 1920,
+  "duration": 10,
+  "seed": 20260813,
+  "content": {
+    "title": "动态生成",
+    "input": "角色拔剑，镜头快速推近，火星掠过",
+    "processing": "运动约束 / 时长 / 首尾帧",
+    "result": "3 秒高动态镜头",
+    "focus": "运动稳定与无畸变"
+  },
+  "stages": [
+    {
+      "id": "input",
+      "start": 0.2
+    },
+    {
+      "id": "processing",
+      "start": 1.7
+    },
+    {
+      "id": "result",
+      "start": 4.1
+    },
+    {
+      "id": "focus",
+      "start": 6.2
+    },
+    {
+      "id": "complete",
+      "start": 8.1
+    }
+  ]
+}

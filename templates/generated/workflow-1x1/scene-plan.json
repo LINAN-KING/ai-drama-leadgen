@@ -1,0 +1,38 @@
+{
+  "id": "workflow-1x1",
+  "template": "workflow",
+  "aspectRatio": "1:1",
+  "width": 1080,
+  "height": 1080,
+  "duration": 10,
+  "seed": 20260813,
+  "content": {
+    "title": "生产工作流",
+    "input": "文案 → 分镜 → 角色 → 场景 → 视频",
+    "processing": "并行生成 / 审片 / 失败重试",
+    "result": "通过 QA 的完整镜头包",
+    "focus": "节点状态与可恢复性"
+  },
+  "stages": [
+    {
+      "id": "input",
+      "start": 0.2
+    },
+    {
+      "id": "processing",
+      "start": 1.7
+    },
+    {
+      "id": "result",
+      "start": 4.1
+    },
+    {
+      "id": "focus",
+      "start": 6.2
+    },
+    {
+      "id": "complete",
+      "start": 8.1
+    }
+  ]
+}

@@ -12,3 +12,4 @@ workspaces/
 .hyperframes/
 doctor-report.json
 *-doctor-report.json
+snapshots/

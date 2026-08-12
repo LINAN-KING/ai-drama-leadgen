@@ -1,0 +1,38 @@
+{
+  "id": "storyboard-9x16",
+  "template": "storyboard",
+  "aspectRatio": "9:16",
+  "width": 1080,
+  "height": 1920,
+  "duration": 10,
+  "seed": 20260813,
+  "content": {
+    "title": "分镜编排",
+    "input": "冲突建立 → 角色抉择 → 悬念落点",
+    "processing": "拆解节拍 / 景别 / 运镜 / 时长",
+    "result": "8 镜头竖屏分镜板",
+    "focus": "高潮镜头与节奏密度"
+  },
+  "stages": [
+    {
+      "id": "input",
+      "start": 0.2
+    },
+    {
+      "id": "processing",
+      "start": 1.7
+    },
+    {
+      "id": "result",
+      "start": 4.1
+    },
+    {
+      "id": "focus",
+      "start": 6.2
+    },
+    {
+      "id": "complete",
+      "start": 8.1
+    }
+  ]
+}

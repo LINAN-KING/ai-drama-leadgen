@@ -3,6 +3,7 @@ import { Command } from "commander";
 import { runDoctor } from "./commands/doctor.js";
 import { runConfigure } from "./commands/configure.js";
 import { runValidate } from "./commands/validate.js";
+import { runScaffold } from "./commands/scaffold.js";
 
 const program = new Command()
   .name("drama-leadgen")
@@ -30,6 +31,13 @@ program
   .description("Validate configuration and local prerequisites without rendering")
   .requiredOption("-c, --config <path>", "task config JSON")
   .action(async ({ config }: { config: string }) => runValidate(config));
+
+program
+  .command("scaffold")
+  .description("Generate the six deterministic workbench templates in three aspect ratios")
+  .option("-o, --output <path>", "output directory", "templates/generated")
+  .option("--seed <number>", "deterministic seed", (value) => Number.parseInt(value, 10), 20260813)
+  .action(async ({ output, seed }: { output: string; seed: number }) => runScaffold(output, seed));
 
 for (const name of ["generate", "batch", "resume"] as const) {
   program

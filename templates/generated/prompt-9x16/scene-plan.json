@@ -1,0 +1,38 @@
+{
+  "id": "prompt-9x16",
+  "template": "prompt",
+  "aspectRatio": "9:16",
+  "width": 1080,
+  "height": 1920,
+  "duration": 10,
+  "seed": 20260813,
+  "content": {
+    "title": "提示词工坊",
+    "input": "玄甲女将踏过燃烧的城门，风雪逆行",
+    "processing": "解析主体 / 动作 / 光线 / 镜头",
+    "result": "电影级东方奇幻关键帧",
+    "focus": "动作与轮廓一致性"
+  },
+  "stages": [
+    {
+      "id": "input",
+      "start": 0.2
+    },
+    {
+      "id": "processing",
+      "start": 1.7
+    },
+    {
+      "id": "result",
+      "start": 4.1
+    },
+    {
+      "id": "focus",
+      "start": 6.2
+    },
+    {
+      "id": "complete",
+      "start": 8.1
+    }
+  ]
+}

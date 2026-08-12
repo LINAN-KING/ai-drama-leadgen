@@ -1,0 +1,38 @@
+{
+  "id": "scene-1x1",
+  "template": "scene",
+  "aspectRatio": "1:1",
+  "width": 1080,
+  "height": 1080,
+  "duration": 10,
+  "seed": 20260813,
+  "content": {
+    "title": "场景构建",
+    "input": "雪夜边城，城楼火光，远处山脊",
+    "processing": "布局前中后景 / 雾效 / 光源",
+    "result": "可复用场景资产包",
+    "focus": "空间纵深与主体安全区"
+  },
+  "stages": [
+    {
+      "id": "input",
+      "start": 0.2
+    },
+    {
+      "id": "processing",
+      "start": 1.7
+    },
+    {
+      "id": "result",
+      "start": 4.1
+    },
+    {
+      "id": "focus",
+      "start": 6.2
+    },
+    {
+      "id": "complete",
+      "start": 8.1
+    }
+  ]
+}

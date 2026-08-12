@@ -14,7 +14,7 @@ A cinematic production console where warm editorial storytelling meets exact mac
 
 ## Typography
 
-- Display and Chinese UI: `Source Han Serif SC`, 800
+- Display and Chinese UI: `Microsoft YaHei`, 800
 - Data and controls: `IBM Plex Mono`, 350/600
 
 ## What NOT to Do
