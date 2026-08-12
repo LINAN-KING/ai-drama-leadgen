@@ -1,0 +1,53 @@
+{
+  "name": "ai-drama-leadgen",
+  "version": "0.1.0",
+  "description": "Deterministic local CLI for AI drama lead-generation videos",
+  "type": "module",
+  "license": "MIT",
+  "private": false,
+  "bin": {
+    "drama-leadgen": "dist/cli/index.js"
+  },
+  "files": [
+    "dist",
+    "content",
+    "templates",
+    "adapters",
+    "installer",
+    "SKILL.md",
+    "ARCHITECTURE.md",
+    "DESIGN.md",
+    "SCENE-SYSTEM.md",
+    "CONTENT-LIBRARY.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint .",
+    "format": "prettier --check .",
+    "format:write": "prettier --write .",
+    "start": "node dist/cli/index.js",
+    "doctor": "tsx src/cli/index.ts doctor"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "commander": "^14.0.0",
+    "hyperframes": "0.7.107",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.0.0",
+    "@types/node": "^24.0.0",
+    "eslint": "^9.0.0",
+    "prettier": "^3.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.9.0",
+    "typescript-eslint": "^8.0.0",
+    "vitest": "^3.0.0"
+  }
+}
