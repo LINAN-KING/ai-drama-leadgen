@@ -2,6 +2,9 @@ import type { MediaProvider, ProviderTier, SearchRequest, MediaCandidate } from 
 import { PexelsProvider } from "./pexels.js";
 import { PixabayProvider } from "./pixabay.js";
 import { WikimediaProvider } from "./wikimedia.js";
+import { EuropeanaProvider } from "./europeana.js";
+import { InternetArchiveProvider } from "./internet-archive.js";
+import { SmithsonianProvider } from "./smithsonian.js";
 
 export interface ProviderDescriptor {
   id: string;
@@ -73,6 +76,9 @@ export function createProviderCatalog(): MediaProvider[] {
     if (item.id === "pexels") return new PexelsProvider();
     if (item.id === "pixabay") return new PixabayProvider();
     if (item.id === "wikimedia") return new WikimediaProvider();
+    if (item.id === "internet-archive") return new InternetArchiveProvider();
+    if (item.id === "europeana") return new EuropeanaProvider();
+    if (item.id === "smithsonian") return new SmithsonianProvider();
     return new UnconfiguredProvider(item.id, item.tier, item.credential);
   });
 }

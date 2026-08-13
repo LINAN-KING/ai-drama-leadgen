@@ -1,6 +1,7 @@
 import dns from "node:dns";
 import { Agent } from "undici";
 import ipaddr from "ipaddr.js";
+import { runBinary } from "../ffmpeg/process.js";
 
 export function isSafePublicAddress(address: string): boolean {
   try {
@@ -27,6 +28,42 @@ export async function resolveSafePublicAddresses(hostname: string): Promise<dns.
   if (!addresses.length || addresses.some(({ address }) => !isSafePublicAddress(address)))
     throw new Error(`Unsafe DNS result for media host: ${hostname}`);
   return addresses;
+}
+
+export async function fetchJsonWithPinnedCurl<T>(
+  urlValue: string | URL,
+  signal?: AbortSignal,
+): Promise<T> {
+  const url = assertSafeNetworkUrl(urlValue);
+  const addresses = (await dns.promises.lookup(url.hostname, { all: true })).filter(({ address }) =>
+    isSafePublicAddress(address),
+  );
+  if (!addresses.length)
+    throw new Error(`No safe public DNS result for media host: ${url.hostname}`);
+  const selected = addresses[0]!;
+  const pinned = selected.family === 6 ? `[${selected.address}]` : selected.address;
+  const response = await runBinary(
+    "curl.exe",
+    [
+      "-fsS",
+      "--proto",
+      "=https",
+      "--max-redirs",
+      "0",
+      "--connect-timeout",
+      "15",
+      "--max-time",
+      "45",
+      "--resolve",
+      `${url.hostname}:443:${pinned}`,
+      "-A",
+      "ai-drama-leadgen/0.1",
+      url.toString(),
+    ],
+    60_000,
+    signal,
+  );
+  return JSON.parse(response.stdout) as T;
 }
 
 export const safeNetworkDispatcher = new Agent({

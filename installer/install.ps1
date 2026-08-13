@@ -94,7 +94,7 @@ if ($InstallAdapters) {
     }
 }
 
-$credentialNames = @('PIXABAY_API_KEY','PEXELS_API_KEY','AGNES_API_KEY','MIMO_API_KEY','FREESOUND_API_KEY','FIRECRAWL_API_KEY')
+$credentialNames = @('PIXABAY_API_KEY','PEXELS_API_KEY','EUROPEANA_API_KEY','SMITHSONIAN_API_KEY','AGNES_API_KEY','MIMO_API_KEY','FREESOUND_API_KEY','FIRECRAWL_API_KEY')
 $credentialTargets = (& cmdkey /list 2>$null) -join "`n"
 $credentials = foreach ($name in $credentialNames) {
     $configured = [bool][Environment]::GetEnvironmentVariable($name)

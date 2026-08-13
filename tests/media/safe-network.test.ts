@@ -15,6 +15,7 @@ describe("safe media networking", () => {
     "fe80::1",
     "fc00::1",
     "::ffff:127.0.0.1",
+    "2001::80f2:f0d4",
   ])("rejects non-public address %s", (address) => {
     expect(isSafePublicAddress(address)).toBe(false);
   });

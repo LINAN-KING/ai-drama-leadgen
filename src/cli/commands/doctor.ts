@@ -169,6 +169,12 @@ export async function collectDoctorReport(cwd = process.cwd()): Promise<DoctorRe
   capabilities.push(
     inspectCredential("free-media", "Free media providers", ["PIXABAY_API_KEY", "PEXELS_API_KEY"]),
   );
+  capabilities.push(
+    inspectCredential("open-media", "Europeana or Smithsonian open media", [
+      "EUROPEANA_API_KEY",
+      "SMITHSONIAN_API_KEY",
+    ]),
+  );
   capabilities.push(inspectCredential("agnes", "Agnes generation", ["AGNES_API_KEY"]));
   capabilities.push(await inspectMimoCredential());
   capabilities.push(inspectCredential("freesound", "Freesound effects", ["FREESOUND_API_KEY"]));

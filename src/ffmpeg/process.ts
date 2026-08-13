@@ -12,10 +12,12 @@ export async function runBinary(
   command: string,
   args: string[],
   timeout = 120_000,
+  signal?: AbortSignal,
 ): Promise<ProcessOutput> {
   const { stdout, stderr } = await execFileAsync(command, args, {
     windowsHide: true,
     timeout,
+    signal,
     maxBuffer: 20 * 1024 * 1024,
   });
   return { stdout, stderr };
