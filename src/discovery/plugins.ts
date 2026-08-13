@@ -2,6 +2,7 @@ import { fetchJson } from "../media-providers/http.js";
 import { assertSafeNetworkUrl } from "../media-providers/safe-network.js";
 import { runPool } from "../scheduler/pool.js";
 import { inspectAgentReachServer, runMcporter, type McporterRunner } from "./mcporter.js";
+import { extractReferenceMarkdown, fetchReferenceHtml, isCrawl4AiAvailable } from "./crawl4ai.js";
 
 export interface DiscoveryReference {
   source: string;
@@ -24,6 +25,12 @@ export interface DiscoveryPlugin {
 export interface DiscoverySignals extends DiscoveryPluginResult {
   failures: Array<{ plugin: string; error: string }>;
   unavailable: string[];
+}
+
+export interface DiscoveryReferenceReader {
+  readonly id: string;
+  isAvailable(signal?: AbortSignal): Promise<boolean>;
+  read(reference: DiscoveryReference, signal?: AbortSignal): Promise<string>;
 }
 
 const STOP_WORDS = new Set([
@@ -148,6 +155,110 @@ export async function collectDiscoverySignals(
   };
 }
 
+export async function enrichDiscoveryReferences(
+  signals: DiscoverySignals,
+  readers: DiscoveryReferenceReader[],
+  concurrency = 2,
+  signal?: AbortSignal,
+): Promise<DiscoverySignals> {
+  if (!signals.references.length || !readers.length) return signals;
+  let current = signals;
+  for (const reader of readers) {
+    signal?.throwIfAborted();
+    let available = false;
+    try {
+      available = await reader.isAvailable(signal);
+    } catch (error) {
+      if (signal?.aborted) throw signal.reason ?? error;
+      current = {
+        ...current,
+        failures: [
+          ...current.failures,
+          { plugin: reader.id, error: error instanceof Error ? error.message : String(error) },
+        ].sort((left, right) =>
+          `${left.plugin}:${left.error}`.localeCompare(`${right.plugin}:${right.error}`),
+        ),
+      };
+      continue;
+    }
+    if (!available) {
+      current = {
+        ...current,
+        unavailable: [...new Set([...current.unavailable, reader.id])].sort(),
+      };
+      continue;
+    }
+    const results = await runPool(
+      current.references.slice(0, 5),
+      () => Math.min(Math.max(1, concurrency), 5),
+      async (reference) => {
+        signal?.throwIfAborted();
+        try {
+          assertSafeNetworkUrl(reference.url);
+          const markdown = await reader.read(reference, signal);
+          return { reference, markdown };
+        } catch (error) {
+          if (signal?.aborted) throw signal.reason ?? error;
+          return {
+            reference,
+            error: error instanceof Error ? error.message : String(error),
+          };
+        }
+      },
+    );
+    signal?.throwIfAborted();
+    const enriched = new Map(current.references.map((reference) => [reference.url, reference]));
+    const failures = [...current.failures];
+    const extractedKeywords: string[] = [];
+    for (const result of results) {
+      if (result.status === "rejected") continue;
+      const { reference } = result.value;
+      if ("error" in result.value) {
+        failures.push({ plugin: reader.id, error: `${reference.url}: ${result.value.error}` });
+        continue;
+      }
+      const snippet = cleanReferenceText(result.value.markdown, 1_000);
+      if (!snippet) continue;
+      enriched.set(reference.url, { ...reference, snippet });
+      extractedKeywords.push(...keywordsFromReferences([{ ...reference, title: snippet }]));
+    }
+    current = {
+      ...current,
+      keywords: normalizeKeywords([...current.keywords, ...extractedKeywords], 8),
+      references: [...enriched.values()],
+      failures: failures.sort((left, right) =>
+        `${left.plugin}:${left.error}`.localeCompare(`${right.plugin}:${right.error}`),
+      ),
+    };
+  }
+  return current;
+}
+
+type HtmlFetcher = (url: URL, signal?: AbortSignal) => Promise<string>;
+type MarkdownExtractor = (html: string, signal?: AbortSignal) => Promise<string>;
+type AvailabilityCheck = (signal?: AbortSignal) => Promise<boolean>;
+
+export class Crawl4AiReferenceReader implements DiscoveryReferenceReader {
+  readonly id = "crawl4ai";
+  constructor(
+    private readonly fetchHtml: HtmlFetcher = (url, signal) => fetchReferenceHtml(url, signal),
+    private readonly extractMarkdown: MarkdownExtractor = (html, signal) =>
+      extractReferenceMarkdown(html, signal),
+    private readonly checkAvailable: AvailabilityCheck = (signal) => isCrawl4AiAvailable(signal),
+  ) {}
+  async isAvailable(signal?: AbortSignal): Promise<boolean> {
+    signal?.throwIfAborted();
+    return this.checkAvailable(signal);
+  }
+  async read(reference: DiscoveryReference, signal?: AbortSignal): Promise<string> {
+    signal?.throwIfAborted();
+    const url = assertSafeNetworkUrl(reference.url);
+    const html = await this.fetchHtml(url, signal);
+    signal?.throwIfAborted();
+    return this.extractMarkdown(html, signal);
+  }
+}
+
 function parseAgentReachOutput(output: string): DiscoveryReference[] {
   const references: DiscoveryReference[] = [];
   let title = "";
@@ -266,4 +377,8 @@ export function createDiscoveryPlugins(): DiscoveryPlugin[] {
     new FirecrawlDiscoveryPlugin(),
     new SearxngDiscoveryPlugin(),
   ];
+}
+
+export function createDiscoveryReferenceReaders(): DiscoveryReferenceReader[] {
+  return [new Crawl4AiReferenceReader()];
 }

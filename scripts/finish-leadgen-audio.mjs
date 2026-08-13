@@ -35,5 +35,5 @@ const handlers = createDefaultHandlers(config);
 const context = { batchId: "audio-e2e", jobId: "audio-e2e-job", variant: 0, workspace };
 for (const node of ["captions", "music"]) await handlers[node]({ ...context, node });
 process.stdout.write(
-  `${JSON.stringify({ coverage: report.coverage, medianErrorMs: report.medianErrorMs, substitutionRate: report.substitutionRate })}\n`,
+  `${JSON.stringify({ coverage: report.coverage, medianTimingResolutionMs: report.medianTimingResolutionMs, substitutionRate: report.substitutionRate })}\n`,
 );

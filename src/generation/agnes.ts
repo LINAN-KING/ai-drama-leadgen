@@ -15,6 +15,7 @@ export interface AgnesArtifact {
   height: number;
   durationSeconds?: number;
   model: string;
+  temporary?: boolean;
 }
 
 export interface AgnesClient {
@@ -24,11 +25,11 @@ export interface AgnesClient {
 
 export function agnesCandidate(artifact: AgnesArtifact, request: AgnesRequest): MediaCandidate {
   const license: LicenseEvidence = {
-    name: "User-authorized Agnes generation",
-    url: "local://agnes-generation",
+    name: "Agnes AI generated output",
+    url: "https://agnes-ai.com/en/docs/terms-of-service",
     commercialUse: true,
     attributionRequired: false,
-    snapshotText: `Generated for this task with ${artifact.model}; usage authority confirmed by the user configuration.`,
+    snapshotText: `Generated for this task with ${artifact.model}. Agnes terms allow the user to own output where permitted by law and third-party rights; human publication review remains required.`,
     capturedAt: new Date().toISOString(),
   };
   return {

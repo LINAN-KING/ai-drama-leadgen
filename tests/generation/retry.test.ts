@@ -126,4 +126,83 @@ describe("bounded Agnes generation", () => {
     expect(result.status).toBe("exhausted");
     expect(Date.now() - startedAt).toBeLessThan(100);
   });
+
+  it("does not overlap a retry and cleans an artifact that resolves after cancellation grace", async () => {
+    let resolveGeneration!: (artifact: {
+      id: string;
+      localPath: string;
+      width: number;
+      height: number;
+      model: string;
+      temporary: boolean;
+    }) => void;
+    let calls = 0;
+    const cleaned: string[] = [];
+    const client: AgnesClient = {
+      async isAvailable() {
+        return true;
+      },
+      generate() {
+        calls += 1;
+        return new Promise((resolve) => {
+          resolveGeneration = resolve;
+        });
+      },
+    };
+    const result = await generateWithQa(
+      client,
+      { prompt: "x", kind: "video", aspectRatio: "9:16", seed: 1 },
+      new GenerationBudget(1, 3),
+      async () => ({ passed: true }),
+      5,
+      5,
+      async (artifact) => {
+        cleaned.push(artifact.localPath);
+      },
+    );
+    expect(result.attempts).toHaveLength(1);
+    expect(calls).toBe(1);
+    resolveGeneration({
+      id: "late",
+      localPath: "late.mp4",
+      width: 720,
+      height: 1280,
+      model: "agnes",
+      temporary: true,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(cleaned).toEqual(["late.mp4"]);
+  });
+
+  it("cleans each rejected temporary artifact before retrying", async () => {
+    const cleaned: string[] = [];
+    const client: AgnesClient = {
+      async isAvailable() {
+        return true;
+      },
+      async generate(request) {
+        return {
+          id: String(request.seed),
+          localPath: `${request.seed}.mp4`,
+          width: 720,
+          height: 1280,
+          model: "agnes",
+          temporary: true,
+        };
+      },
+    };
+    const result = await generateWithQa(
+      client,
+      { prompt: "x", kind: "video", aspectRatio: "9:16", seed: 1 },
+      new GenerationBudget(1, 2),
+      async () => ({ passed: false }),
+      100,
+      10,
+      async (artifact) => {
+        cleaned.push(artifact.localPath);
+      },
+    );
+    expect(result.status).toBe("exhausted");
+    expect(cleaned).toEqual(["1.mp4", "2.mp4"]);
+  });
 });

@@ -9,6 +9,24 @@ param(
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 
+function Get-PythonInvocation {
+    if ($env:DRAMA_LEADGEN_PYTHON) {
+        return [ordered]@{ command = $env:DRAMA_LEADGEN_PYTHON; arguments = @() }
+    }
+    if (Get-Command py -ErrorAction SilentlyContinue) {
+        return [ordered]@{ command = 'py'; arguments = @('-3') }
+    }
+    return [ordered]@{ command = 'python'; arguments = @() }
+}
+
+function Test-PythonModule {
+    param([hashtable]$Python, [string]$Module)
+    & $Python.command @($Python.arguments) -c "import $Module" 2>$null
+    return $LASTEXITCODE -eq 0
+}
+
+$python = Get-PythonInvocation
+
 function Get-CommandProbe {
     param([string]$Name, [string[]]$Arguments, [bool]$Required)
     $command = Get-Command $Name -ErrorAction SilentlyContinue
@@ -43,12 +61,12 @@ if ($InstallSafeDependencies -and $PSCmdlet.ShouldProcess($repoRoot, 'Install np
 
 if ($InstallOptionalTools) {
     $optionalInstalls = @(
-        [ordered]@{ name = 'edge-tts'; command = 'python'; arguments = @('-m','pip','install','--user','edge-tts') }
-        [ordered]@{ name = 'whisper'; command = 'python'; arguments = @('-m','pip','install','--user','openai-whisper') }
-        [ordered]@{ name = 'crawl4ai'; command = 'python'; arguments = @('-m','pip','install','--user','crawl4ai') }
+        [ordered]@{ name = 'edge-tts'; module = 'edge_tts'; command = $python.command; arguments = @($python.arguments) + @('-m','pip','install','--user','edge-tts') }
+        [ordered]@{ name = 'whisper'; module = 'whisper'; command = $python.command; arguments = @($python.arguments) + @('-m','pip','install','--user','openai-whisper') }
+        [ordered]@{ name = 'crawl4ai'; module = 'crawl4ai'; command = $python.command; arguments = @($python.arguments) + @('-m','pip','install','--user','crawl4ai') }
     )
     foreach ($install in $optionalInstalls) {
-        if (-not (Get-Command $install.name -ErrorAction SilentlyContinue) -and $PSCmdlet.ShouldProcess($install.name, 'Install optional user-level dependency')) {
+        if (-not (Test-PythonModule $python $install.module) -and $PSCmdlet.ShouldProcess($install.name, 'Install optional user-level dependency')) {
             & $install.command @($install.arguments)
             if ($LASTEXITCODE -ne 0) { throw "Failed to install $($install.name)." }
         }

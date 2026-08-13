@@ -1,10 +1,12 @@
-import { copyFile, mkdir } from "node:fs/promises";
+import { copyFile, mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import type { TaskConfig } from "../config/schema.js";
 import { discoverCandidates, type DiscoveryResult } from "../discovery/discover.js";
 import {
   collectDiscoverySignals,
+  enrichDiscoveryReferences,
   type DiscoveryPlugin,
+  type DiscoveryReferenceReader,
   type DiscoverySignals,
 } from "../discovery/plugins.js";
 import type { AgnesClient, AgnesRequest } from "../generation/agnes.js";
@@ -57,11 +59,16 @@ export async function discoverLeadgenMedia(
   config: TaskConfig,
   providers: MediaProvider[],
   plugins: DiscoveryPlugin[] = [],
+  readers: DiscoveryReferenceReader[] = [],
 ): Promise<LeadgenDiscovery> {
-  const signals = await collectDiscoverySignals(
-    plugins,
-    `${config.topic} ${config.workflow} ${config.platform} AI drama trends`,
-    Math.min(config.concurrency.search, 3),
+  const signals = await enrichDiscoveryReferences(
+    await collectDiscoverySignals(
+      plugins,
+      `${config.topic} ${config.workflow} ${config.platform} AI drama trends`,
+      Math.min(config.concurrency.search, 3),
+    ),
+    readers,
+    Math.min(config.concurrency.search, 2),
   );
   const expanded = signals.keywords.slice(0, 4).join(" ");
   const request = {
@@ -88,6 +95,9 @@ export async function acquireLeadgenMedia(options: {
   resources?: LeadgenResourceLimits;
   agnesAttemptTimeoutMs?: number;
 }): Promise<{ assets: FrozenMediaAsset[]; gaps: string[] }> {
+  const cleanupGenerated = async (artifact: { localPath: string; temporary?: boolean }) => {
+    if (artifact.temporary) await rm(artifact.localPath, { force: true });
+  };
   const required = options.required ?? 9;
   const usage = await options.library.usageMap();
   const ranked = rejectAdjacentSimilarity(
@@ -160,6 +170,8 @@ export async function acquireLeadgenMedia(options: {
             return { passed: report.passed, reason: report.hardFailures.join(", ") };
           },
           options.agnesAttemptTimeoutMs,
+          5_000,
+          cleanupGenerated,
         ),
       );
       if (generated.status !== "accepted" || !generated.artifact) {
@@ -176,6 +188,8 @@ export async function acquireLeadgenMedia(options: {
         assets.push({ ...record, candidate });
       } catch (error) {
         gaps.push(`${candidate.id}:${error instanceof Error ? error.message : String(error)}`);
+      } finally {
+        await cleanupGenerated(generated.artifact);
       }
     }
   }

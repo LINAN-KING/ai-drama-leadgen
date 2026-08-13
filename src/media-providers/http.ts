@@ -81,9 +81,12 @@ export async function fetchJson<T>(
   init: RequestInit,
   signal?: AbortSignal,
   attemptTimeoutMs = 30_000,
+  maxAttempts = 3,
 ): Promise<T> {
+  if (!Number.isInteger(maxAttempts) || maxAttempts < 1)
+    throw new Error("maxAttempts must be a positive integer");
   let lastError: unknown;
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     if (signal?.aborted) throw signal.reason ?? new Error("Request aborted");
     const attemptSignal = AbortSignal.any([
       signal ?? new AbortController().signal,
@@ -129,7 +132,7 @@ export async function fetchJson<T>(
         2_000,
         Math.max(100, (error.retryAfterSeconds ?? attempt * 0.2) * 1000),
       );
-      if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, delay));
+      if (attempt < maxAttempts) await new Promise((resolve) => setTimeout(resolve, delay));
       continue;
     } catch (error) {
       if (error instanceof ProviderResponseSizeError) throw error;
@@ -137,10 +140,10 @@ export async function fetchJson<T>(
         throw error;
       if (signal?.aborted) throw signal.reason ?? error;
       lastError = error;
-      if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, attempt * 200));
+      if (attempt < maxAttempts) await new Promise((resolve) => setTimeout(resolve, attempt * 200));
     }
   }
   throw lastError instanceof Error
     ? lastError
-    : new Error("Provider request failed after 3 attempts");
+    : new Error(`Provider request failed after ${maxAttempts} attempts`);
 }

@@ -36,4 +36,18 @@ describe("script plan", () => {
     expect(first.sections.at(-1)?.narration).toBe(config.ctaText);
     expect(first).not.toEqual(createScriptPlan(config, 4));
   });
+
+  it("truncates spoken workflow text without an ellipsis placeholder", () => {
+    const plan = createScriptPlan(
+      taskConfigSchema.parse({
+        ...config,
+        mode: "leadgen",
+        targetDurationSeconds: 40,
+        workflow: "从主题提炼提示词，生成角色设定与故事分镜，再完成动态镜头和成片检查",
+      }),
+    );
+    const narration = plan.sections.find((section) => section.id === "workbench")!.narration;
+    expect(narration).toContain("从主题提炼提示词，生成角色设定与故事分镜");
+    expect(narration).not.toContain("…");
+  });
 });

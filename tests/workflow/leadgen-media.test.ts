@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp } from "node:fs/promises";
+import { access, mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -66,6 +66,7 @@ describe("leadgen media acquisition", () => {
           height: 1280,
           durationSeconds: request.durationSeconds,
           model: "test-agnes",
+          temporary: true,
         };
       },
     };
@@ -89,6 +90,10 @@ describe("leadgen media acquisition", () => {
     expect(
       result.assets.every((asset) => asset.license.commercialUse && asset.sha256.length === 64),
     ).toBe(true);
+    await Promise.all(generated.map((file) => expect(access(file)).rejects.toThrow()));
+    await Promise.all(
+      result.assets.map((asset) => expect(access(asset.originalPath)).resolves.toBeUndefined()),
+    );
   }, 120_000);
 
   it("preserves licensed candidates when another provider fails", async () => {

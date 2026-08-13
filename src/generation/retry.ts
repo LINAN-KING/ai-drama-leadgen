@@ -35,8 +35,9 @@ export async function generateWithQa(
   request: AgnesRequest,
   budget: GenerationBudget,
   qa: (artifact: AgnesArtifact) => Promise<{ passed: boolean; reason?: string }>,
-  attemptTimeoutMs = 120_000,
+  attemptTimeoutMs = 600_000,
   cancellationGraceMs = 5_000,
+  cleanup?: (artifact: AgnesArtifact) => Promise<void>,
 ): Promise<GenerationOutcome> {
   if (!(await client.isAvailable())) return { status: "unavailable", attempts: [] };
   budget.reserve(request.kind);
@@ -46,6 +47,9 @@ export async function generateWithQa(
     let timer: ReturnType<typeof setTimeout> | undefined;
     let timedOut = false;
     let generation: Promise<AgnesArtifact> | undefined;
+    let generationSettled = false;
+    let artifact: AgnesArtifact | undefined;
+    let cancellationUnsettled = false;
     try {
       const timeout = new Promise<never>((_, reject) => {
         timer = setTimeout(() => {
@@ -58,7 +62,15 @@ export async function generateWithQa(
         { ...request, seed: request.seed + attempt - 1 },
         controller.signal,
       );
-      const artifact = await Promise.race([generation, timeout]);
+      void generation.then(
+        () => {
+          generationSettled = true;
+        },
+        () => {
+          generationSettled = true;
+        },
+      );
+      artifact = await Promise.race([generation, timeout]);
       const result = await qa(artifact);
       attempts.push({ attempt, artifact, accepted: result.passed, reason: result.reason });
       if (result.passed) return { status: "accepted", artifact, attempts };
@@ -72,7 +84,7 @@ export async function generateWithQa(
       if (timer) clearTimeout(timer);
       if (timedOut && generation) {
         try {
-          await Promise.race([
+          artifact = await Promise.race([
             generation,
             new Promise<never>((_, reject) =>
               setTimeout(
@@ -83,9 +95,16 @@ export async function generateWithQa(
           ]);
         } catch {
           // Preserve the timeout as the attempt result after cancellation settles.
+          cancellationUnsettled = !generationSettled;
+          if (cancellationUnsettled)
+            void generation
+              .then(async (lateArtifact) => cleanup?.(lateArtifact))
+              .catch(() => undefined);
         }
       }
+      if (artifact && attempts.at(-1)?.accepted !== true) await cleanup?.(artifact);
     }
+    if (cancellationUnsettled) break;
   }
   return { status: "exhausted", attempts };
 }

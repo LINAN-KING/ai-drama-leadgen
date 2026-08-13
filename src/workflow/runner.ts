@@ -16,6 +16,7 @@ import {
   type WorkflowNodeId,
   parseBatchState,
 } from "./types.js";
+import type { TtsProviderId } from "../tts/types.js";
 
 const now = () => new Date().toISOString();
 
@@ -24,10 +25,10 @@ export const WORKFLOW_NODE_VERSIONS: Record<WorkflowNodeId, number> = {
   script: 1,
   discover: 2,
   media: 2,
-  tts: 2,
-  alignment: 2,
+  tts: 4,
+  alignment: 4,
   captions: 1,
-  music: 1,
+  music: 2,
   edl: 2,
   render: 2,
   qa: 2,
@@ -68,6 +69,8 @@ function nodeInput(config: TaskConfig, variant: number, node: WorkflowNodeId): u
           firecrawlUrl: process.env.FIRECRAWL_URL ?? null,
           firecrawlConfigured: Boolean(process.env.FIRECRAWL_API_KEY),
           searxngUrl: process.env.SEARXNG_URL ?? null,
+          crawl4aiEnabled: true,
+          crawl4aiPython: process.env.DRAMA_LEADGEN_PYTHON ?? null,
           pexelsConfigured: Boolean(process.env.PEXELS_API_KEY),
           pixabayConfigured: Boolean(process.env.PIXABAY_API_KEY),
           europeanaConfigured: Boolean(process.env.EUROPEANA_API_KEY),
@@ -179,6 +182,52 @@ function jobWorkspace(workspace: string, job: JobState): string {
     throw new Error(`Unsafe job ID would escape the jobs workspace: ${job.id}`);
   }
   return resolved;
+}
+
+async function writeBatchTtsReport(
+  config: TaskConfig,
+  workspace: string,
+  state: BatchState,
+): Promise<void> {
+  if (config.mode !== "leadgen") return;
+  const successfulJobs = state.jobs.filter((candidate) => candidate.status === "succeeded");
+  const reports = await Promise.all(
+    successfulJobs.map(async (job) => {
+      const report = JSON.parse(
+        await readFile(path.join(jobWorkspace(workspace, job), "tts-report.json"), "utf8"),
+      ) as { requested?: unknown; actual?: unknown };
+      if (
+        (report.requested !== "edge" && report.requested !== "mimo") ||
+        (report.actual !== "edge" && report.actual !== "mimo")
+      )
+        throw new Error(`Invalid TTS report for successful job: ${job.id}`);
+      return report as { requested: TtsProviderId; actual: TtsProviderId };
+    }),
+  );
+  const counts = (field: "requested" | "actual") => ({
+    edge: reports.filter((report) => report[field] === "edge").length,
+    mimo: reports.filter((report) => report[field] === "mimo").length,
+  });
+  const ratios = (values: { edge: number; mimo: number }) => ({
+    edge: reports.length ? Number((values.edge / reports.length).toFixed(6)) : 0,
+    mimo: reports.length ? Number((values.mimo / reports.length).toFixed(6)) : 0,
+  });
+  const requestedCounts = counts("requested");
+  const actualCounts = counts("actual");
+  await writeFile(
+    path.join(workspace, "batch-tts-report.json"),
+    `${JSON.stringify(
+      {
+        successfulJobs: reports.length,
+        requested: { counts: requestedCounts, ratios: ratios(requestedCounts) },
+        actual: { counts: actualCounts, ratios: ratios(actualCounts) },
+        fallbackCount: reports.filter((report) => report.requested !== report.actual).length,
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
 }
 
 function assertResumeCompatible(config: TaskConfig, state: BatchState): void {
@@ -382,6 +431,7 @@ export async function runBatch(
     await Promise.all(active);
     state.updatedAt = now();
     await store.write(state);
+    await writeBatchTtsReport(config, workspace, state);
     return state;
   } finally {
     await releaseLock();

@@ -20,19 +20,21 @@
     "DESIGN.md",
     "SCENE-SYSTEM.md",
     "CONTENT-LIBRARY.md",
+    "RELEASE-READINESS.md",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
     "build": "node scripts/clean.mjs && tsc -p tsconfig.build.json",
     "check": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run",
+    "test": "vitest run --pool=threads --maxWorkers=1 --no-file-parallelism",
     "test:watch": "vitest",
     "lint": "eslint .",
     "format": "prettier --check .",
     "format:write": "prettier --write .",
     "start": "node dist/cli/index.js",
-    "doctor": "tsx src/cli/index.ts doctor"
+    "doctor": "tsx src/cli/index.ts doctor",
+    "prepack": "npm run build"
   },
   "engines": {
     "node": ">=22"

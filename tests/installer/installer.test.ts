@@ -14,6 +14,9 @@ describe("Windows installer", () => {
     expect(source).toContain("playwright install chromium");
     expect(source).toContain("openai-whisper");
     expect(source).toContain("crawl4ai");
+    expect(source).toContain("Test-PythonModule");
+    expect(source).toContain("DRAMA_LEADGEN_PYTHON");
+    expect(source).toContain("command = 'py'; arguments = @('-3')");
     expect(source).toContain("ShouldProcess");
     expect(source).not.toMatch(/cookie|password/i);
   });
@@ -33,6 +36,18 @@ describe("Windows installer", () => {
       expect(source).toContain("configure --input");
       expect(source).toContain("run exactly one command");
     }
+  });
+
+  it("stores Agnes credentials through hidden input", async () => {
+    const source = await readFile(
+      path.join(process.cwd(), "installer", "store-agnes-credential.ps1"),
+      "utf8",
+    );
+    expect(source).toContain("Read-Host 'Paste the rotated Agnes API key' -AsSecureString");
+    expect(source).toContain("ai-drama-leadgen-agnes");
+    expect(source).toContain("CredWriteW");
+    expect(source).not.toContain("cmdkey /generic");
+    expect(source).toContain("ZeroFreeBSTR");
   });
 
   it("installs self-contained adapters into all five agent roots", async () => {

@@ -4,6 +4,23 @@ import { fetchJson } from "../../src/media-providers/http.js";
 afterEach(() => vi.unstubAllGlobals());
 
 describe("provider HTTP recovery", () => {
+  it("allows non-idempotent callers to disable retries", async () => {
+    const fetchMock = vi.fn(async () => {
+      throw new Error("connection reset after upload");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(
+      fetchJson(
+        new URL("https://example.test/create"),
+        { method: "POST", body: "payload" },
+        undefined,
+        30_000,
+        1,
+      ),
+    ).rejects.toThrow("connection reset after upload");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("retries a rate limit and returns the later response", async () => {
     const fetchMock = vi
       .fn()

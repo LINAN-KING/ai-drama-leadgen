@@ -24,7 +24,17 @@ const PROOF = ["每个节点都能检查、重试和继续。", "素材、字幕
 
 function speechExcerpt(value: string, maxCharacters: number): string {
   const compact = value.replace(/\s+/g, "").replace(/[。！？!?]+$/g, "");
-  return compact.length <= maxCharacters ? compact : `${compact.slice(0, maxCharacters - 1)}…`;
+  if (compact.length <= maxCharacters) return compact;
+  const candidate = compact.slice(0, maxCharacters);
+  const boundary = Math.max(
+    candidate.lastIndexOf("，"),
+    candidate.lastIndexOf("、"),
+    candidate.lastIndexOf("；"),
+    candidate.lastIndexOf(";"),
+  );
+  return (
+    boundary >= Math.floor(maxCharacters / 2) ? candidate.slice(0, boundary) : candidate
+  ).replace(/[，、；;]+$/g, "");
 }
 
 export function createScriptPlan(config: TaskConfig, variant = 0): ScriptPlan {

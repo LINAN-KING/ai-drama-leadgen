@@ -12,7 +12,7 @@ export interface AlignedWord extends TranscriptWord {
 export interface AlignmentReport {
   words: AlignedWord[];
   coverage: number;
-  medianErrorMs: number;
+  medianTimingResolutionMs: number;
   substitutionRate: number;
   passed: boolean;
   failures: string[];

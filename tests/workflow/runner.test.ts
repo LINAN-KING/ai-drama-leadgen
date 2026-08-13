@@ -506,4 +506,63 @@ describe("persistent workflow", () => {
     expect(result.jobs.filter((job) => job.status === "succeeded")).toHaveLength(6);
     expect(secondPeak).toBe(2);
   }, 15_000);
+
+  it("writes requested and actual TTS ratios for successful jobs", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "workflow-tts-report-"));
+    const leadgen = taskConfigSchema.parse({
+      ...config,
+      mode: "leadgen",
+      targetDurationSeconds: 40,
+      count: 2,
+      concurrency: { ...config.concurrency, jobs: 1 },
+    });
+    const handlers = Object.fromEntries(
+      WORKFLOW_NODES.map((id) => [
+        id,
+        async ({ workspace, variant }: Parameters<NodeHandler>[0]) => {
+          const output = path.join(workspace, `${id}.json`);
+          await writeFile(output, "{}");
+          if (id === "tts")
+            await writeFile(
+              path.join(workspace, "tts-report.json"),
+              JSON.stringify({
+                requested: variant === 0 ? "edge" : "mimo",
+                actual: "mimo",
+              }),
+            );
+          return { outputFiles: [output] };
+        },
+      ]),
+    ) as Record<string, NodeHandler>;
+    await runBatch(leadgen, root, handlers);
+    const report = JSON.parse(await readFile(path.join(root, "batch-tts-report.json"), "utf8"));
+    expect(report).toEqual({
+      successfulJobs: 2,
+      requested: { counts: { edge: 1, mimo: 1 }, ratios: { edge: 0.5, mimo: 0.5 } },
+      actual: { counts: { edge: 0, mimo: 2 }, ratios: { edge: 0, mimo: 1 } },
+      fallbackCount: 1,
+    });
+  });
+
+  it("fails closed when a successful leadgen job lacks its TTS report", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "workflow-missing-tts-report-"));
+    const leadgen = taskConfigSchema.parse({
+      ...config,
+      mode: "leadgen",
+      targetDurationSeconds: 40,
+      count: 1,
+      concurrency: { ...config.concurrency, jobs: 1 },
+    });
+    const handlers = Object.fromEntries(
+      WORKFLOW_NODES.map((id) => [
+        id,
+        async ({ workspace }: Parameters<NodeHandler>[0]) => {
+          const output = path.join(workspace, `${id}.json`);
+          await writeFile(output, "{}");
+          return { outputFiles: [output] };
+        },
+      ]),
+    ) as Record<string, NodeHandler>;
+    await expect(runBatch(leadgen, root, handlers)).rejects.toThrow(/tts-report\.json/i);
+  });
 });

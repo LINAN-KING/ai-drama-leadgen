@@ -82,7 +82,9 @@ export function alignTranscript(sourceText: string, transcript: TranscriptWord[]
         end: item.end,
         sourceText: pair.sourceIndex === null ? "" : source[pair.sourceIndex]!,
         sourceIndex: pair.sourceIndex ?? -1,
-        matched: pair.sourceIndex !== null,
+        matched:
+          pair.sourceIndex !== null &&
+          source[pair.sourceIndex] === flatTranscript[pair.transcriptIndex]?.text,
       },
     ];
   });
@@ -91,19 +93,19 @@ export function alignTranscript(sourceText: string, transcript: TranscriptWord[]
     .filter((word) => word.matched)
     .map((word) => (Math.max(0, word.end - word.start) * 1000) / 2)
     .sort((a, b) => a - b);
-  const medianErrorMs = errors.length
+  const medianTimingResolutionMs = errors.length
     ? errors[Math.floor(errors.length / 2)]!
     : Number.POSITIVE_INFINITY;
   const failures: string[] = [];
   if (coverage < 0.98) failures.push("source-coverage-below-98-percent");
   const substitutionRate = source.length ? substitutions / source.length : 0;
-  if (medianErrorMs > 120) failures.push("median-word-error-above-120ms");
+  if (medianTimingResolutionMs > 120) failures.push("median-word-timing-resolution-above-120ms");
   for (let index = 1; index < words.length; index += 1)
     if (words[index]!.start < words[index - 1]!.end) failures.push("overlapping-word-times");
   return {
     words,
     coverage: Number(coverage.toFixed(6)),
-    medianErrorMs: Number(medianErrorMs.toFixed(3)),
+    medianTimingResolutionMs: Number(medianTimingResolutionMs.toFixed(3)),
     substitutionRate: Number(substitutionRate.toFixed(6)),
     passed: failures.length === 0,
     failures: [...new Set(failures)],

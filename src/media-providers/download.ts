@@ -33,12 +33,21 @@ async function fetchSafe(url: URL, signal: AbortSignal): Promise<Response> {
   throw new Error("Media download exceeded 5 redirects");
 }
 
-export async function downloadMedia(url: string, outputPath: string, timeoutMs = 120_000) {
+export async function downloadMedia(
+  url: string,
+  outputPath: string,
+  timeoutMs = 120_000,
+  signal?: AbortSignal,
+) {
   if (url.startsWith("local://")) throw new Error(`Cannot download unresolved local URL: ${url}`);
   if (path.isAbsolute(url)) return url;
   const parsedUrl = assertSafeDownloadUrl(url);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const operationSignal = AbortSignal.any([
+    controller.signal,
+    signal ?? new AbortController().signal,
+  ]);
   let temporary: string | undefined;
   let published = false;
   try {
@@ -47,7 +56,7 @@ export async function downloadMedia(url: string, outputPath: string, timeoutMs =
     try {
       if (process.platform === "win32" && parsedUrl.hostname === "upload.wikimedia.org")
         throw new Error("Use the Windows system network stack for Wikimedia downloads");
-      const response = await fetchSafe(parsedUrl, controller.signal);
+      const response = await fetchSafe(parsedUrl, operationSignal);
       if (!response.ok)
         throw new Error(`Media download failed: ${response.status} ${response.statusText}`);
       if (!response.body) throw new Error("Media download returned an empty body");
@@ -57,7 +66,7 @@ export async function downloadMedia(url: string, outputPath: string, timeoutMs =
       if (
         process.platform !== "win32" ||
         parsedUrl.hostname !== "upload.wikimedia.org" ||
-        controller.signal.aborted
+        operationSignal.aborted
       ) {
         await rm(temporary, { force: true });
         throw error;
@@ -90,6 +99,7 @@ export async function downloadMedia(url: string, outputPath: string, timeoutMs =
             parsedUrl.toString(),
           ],
           timeoutMs + 5_000,
+          operationSignal,
         );
       } catch (curlError) {
         await rm(temporary, { force: true });

@@ -1,4 +1,5 @@
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
+import path from "node:path";
 import { runBinary } from "../ffmpeg/process.js";
 import type { TranscriptWord } from "./types.js";
 
@@ -55,4 +56,55 @@ function pathBase(filePath: string): string {
     .split("/")
     .at(-1)!
     .replace(/\.[^.]+$/, "");
+}
+
+export async function transcribeSectionsWithWhisper(
+  audioPath: string,
+  outputDirectory: string,
+  sections: Array<{ id: string; narration: string; start: number; end: number }>,
+  model = "small",
+  dependencies: {
+    extract?: (input: string, output: string, start: number, duration: number) => Promise<void>;
+    transcribe?: typeof transcribeWithWhisper;
+  } = {},
+): Promise<TranscriptWord[]> {
+  await mkdir(outputDirectory, { recursive: true });
+  const extract =
+    dependencies.extract ??
+    (async (input, output, start, duration) => {
+      await runBinary(
+        "ffmpeg",
+        [
+          "-y",
+          "-ss",
+          start.toFixed(3),
+          "-t",
+          duration.toFixed(3),
+          "-i",
+          input,
+          "-ar",
+          "16000",
+          "-ac",
+          "1",
+          output,
+        ],
+        120_000,
+      );
+    });
+  const transcribe = dependencies.transcribe ?? transcribeWithWhisper;
+  const transcript: TranscriptWord[] = [];
+  for (const [index, section] of sections.entries()) {
+    const clip = path.join(outputDirectory, `section-${String(index).padStart(2, "0")}.wav`);
+    const sectionOutput = path.join(outputDirectory, `section-${String(index).padStart(2, "0")}`);
+    await extract(audioPath, clip, section.start, section.end - section.start);
+    const words = await transcribe(clip, sectionOutput, model, section.narration);
+    transcript.push(
+      ...words.map((word) => ({
+        ...word,
+        start: word.start + section.start,
+        end: word.end + section.start,
+      })),
+    );
+  }
+  return transcript;
 }

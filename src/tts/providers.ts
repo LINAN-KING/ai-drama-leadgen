@@ -1,7 +1,7 @@
 import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { runBinary } from "../ffmpeg/process.js";
+import { runBinary, type ProcessOutput } from "../ffmpeg/process.js";
 import { hasWindowsCredential } from "../config/windows-credentials.js";
 import type { TtsProvider, TtsSynthesisRequest } from "./types.js";
 
@@ -50,30 +50,58 @@ export class MimoProvider implements TtsProvider {
 
 export class EdgeProvider implements TtsProvider {
   readonly id = "edge" as const;
-  constructor(private readonly command = "edge-tts") {}
+  constructor(
+    private readonly command = "edge-tts",
+    private readonly runner: (
+      command: string,
+      args: string[],
+      timeout?: number,
+    ) => Promise<ProcessOutput> = runBinary,
+  ) {}
   async isAvailable(): Promise<boolean> {
     try {
-      await runBinary(this.command, ["--version"], 10_000);
+      await this.runner(this.command, ["--version"], 10_000);
       return true;
     } catch {
       return false;
     }
   }
   async synthesize(request: TtsSynthesisRequest): Promise<void> {
-    const rate = Math.round((request.speed - 1) * 100);
-    await runBinary(
-      this.command,
-      [
-        "--text",
-        request.segment.text,
-        "--voice",
-        "zh-CN-YunxiNeural",
-        "--rate",
-        `${rate >= 0 ? "+" : ""}${rate}%`,
-        "--write-media",
-        request.outputPath,
-      ],
-      120_000,
-    );
+    const root = await mkdtemp(path.join(os.tmpdir(), "edge-tts-"));
+    try {
+      const source = path.join(root, "source.mp3");
+      await this.runner(
+        this.command,
+        [
+          "--text",
+          request.segment.text,
+          "--voice",
+          "zh-CN-YunxiNeural",
+          "--rate",
+          "+0%",
+          "--write-media",
+          source,
+        ],
+        120_000,
+      );
+      await this.runner(
+        "ffmpeg",
+        [
+          "-y",
+          "-i",
+          source,
+          "-filter:a",
+          `atempo=${request.speed.toFixed(3)}`,
+          "-ar",
+          "48000",
+          "-ac",
+          "1",
+          request.outputPath,
+        ],
+        120_000,
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   }
 }

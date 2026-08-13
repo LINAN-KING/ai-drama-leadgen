@@ -7,6 +7,7 @@ import { writeJson } from "../../config/files.js";
 import type { CapabilityResult } from "../../reporting/result.js";
 import { hasWindowsCredential } from "../../config/windows-credentials.js";
 import { inspectAgentReachServer } from "../../discovery/mcporter.js";
+import { isCrawl4AiAvailable } from "../../discovery/crawl4ai.js";
 import {
   assertSafeNetworkUrl,
   resolveSafePublicAddresses,
@@ -50,13 +51,6 @@ const COMMANDS = [
   { id: "python", label: "Python", command: "python", args: ["--version"], required: false },
   { id: "edge-tts", label: "Edge TTS", command: "edge-tts", args: ["--version"], required: false },
   { id: "whisper", label: "Whisper", command: "whisper", args: ["--help"], required: false },
-  {
-    id: "crawl4ai",
-    label: "Crawl4AI",
-    command: "crawl4ai-doctor",
-    args: ["--help"],
-    required: false,
-  },
 ] as const;
 
 async function inspectCommand(spec: (typeof COMMANDS)[number]): Promise<CapabilityResult> {
@@ -144,7 +138,7 @@ export async function inspectDiscoveryEndpoint(
 async function inspectAgentReach(): Promise<CapabilityResult> {
   const server = process.env.AGENT_REACH_SERVER ?? "exa";
   try {
-    const available = await inspectAgentReachServer(server);
+    const available = await inspectAgentReachServer(server, undefined, AbortSignal.timeout(5_000));
     return {
       id: "agent-reach",
       label: "Agent Reach discovery (mcporter/exa)",
@@ -161,6 +155,18 @@ async function inspectAgentReach(): Promise<CapabilityResult> {
   }
 }
 
+async function inspectCrawl4Ai(): Promise<CapabilityResult> {
+  const available = await isCrawl4AiAvailable();
+  return {
+    id: "crawl4ai",
+    label: "Crawl4AI reference reader",
+    status: available ? "available" : "optional",
+    detail: available
+      ? "Python module is importable; raw-HTML reference enrichment is enabled"
+      : "Install the crawl4ai Python package to enrich discovered reference pages",
+  };
+}
+
 async function inspectMimoCredential(): Promise<CapabilityResult> {
   if (process.env.MIMO_API_KEY) return inspectCredential("mimo", "MiMo TTS", ["MIMO_API_KEY"]);
   const found = await hasWindowsCredential("ai-commerce-mimo-tts");
@@ -171,6 +177,20 @@ async function inspectMimoCredential(): Promise<CapabilityResult> {
     detail: found
       ? "Credential detected in Windows Credential Manager"
       : "Store target ai-commerce-mimo-tts or set MIMO_API_KEY to enable",
+  };
+}
+
+async function inspectAgnesCredential(): Promise<CapabilityResult> {
+  if (process.env.AGNES_API_KEY)
+    return inspectCredential("agnes", "Agnes generation", ["AGNES_API_KEY"]);
+  const found = await hasWindowsCredential("ai-drama-leadgen-agnes");
+  return {
+    id: "agnes",
+    label: "Agnes generation",
+    status: found ? "available" : "manual-action",
+    detail: found
+      ? "Credential detected in Windows Credential Manager"
+      : "Store target ai-drama-leadgen-agnes or set AGNES_API_KEY to enable",
   };
 }
 
@@ -224,32 +244,33 @@ async function detectChrome(): Promise<CapabilityResult> {
 }
 
 export async function collectDoctorReport(cwd = process.cwd()): Promise<DoctorReport> {
-  const capabilities = await Promise.all(COMMANDS.map(inspectCommand));
-  capabilities.push(await inspectAgentReach());
-  capabilities.push(await detectChrome());
-  capabilities.push(
+  const staticCapabilities = [
     inspectCredential("free-media", "Free media providers", ["PIXABAY_API_KEY", "PEXELS_API_KEY"]),
-  );
-  capabilities.push(
     inspectCredential("open-media", "Europeana or Smithsonian open media", [
       "EUROPEANA_API_KEY",
       "SMITHSONIAN_API_KEY",
     ]),
-  );
-  capabilities.push(inspectCredential("agnes", "Agnes generation", ["AGNES_API_KEY"]));
-  capabilities.push(await inspectMimoCredential());
-  capabilities.push(inspectCredential("freesound", "Freesound effects", ["FREESOUND_API_KEY"]));
-  capabilities.push(
-    await inspectDiscoveryEndpoint(
+    inspectCredential("freesound", "Freesound effects", ["FREESOUND_API_KEY"]),
+  ];
+  const dynamicCapabilities = await Promise.all([
+    inspectAgentReach(),
+    inspectCrawl4Ai(),
+    detectChrome(),
+    inspectAgnesCredential(),
+    inspectMimoCredential(),
+    inspectDiscoveryEndpoint(
       "firecrawl",
       "Firecrawl discovery",
       ["FIRECRAWL_API_KEY", "FIRECRAWL_URL"],
       "FIRECRAWL_URL",
     ),
-  );
-  capabilities.push(
-    await inspectDiscoveryEndpoint("searxng", "SearXNG discovery", ["SEARXNG_URL"], "SEARXNG_URL"),
-  );
+    inspectDiscoveryEndpoint("searxng", "SearXNG discovery", ["SEARXNG_URL"], "SEARXNG_URL"),
+  ]);
+  const capabilities = [
+    ...(await Promise.all(COMMANDS.map(inspectCommand))),
+    ...dynamicCapabilities,
+    ...staticCapabilities,
+  ];
   let freeDiskBytes: number | null = null;
   try {
     const disk = await statfs(cwd);

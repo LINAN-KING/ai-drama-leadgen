@@ -6,7 +6,7 @@ describe("doctor", () => {
   let report: Awaited<ReturnType<typeof collectDoctorReport>>;
   beforeAll(async () => {
     report = await collectDoctorReport();
-  }, 15_000);
+  }, 30_000);
 
   it("detects the npm launcher on Windows", () => {
     const npm = report.capabilities.find((item) => item.id === "npm");

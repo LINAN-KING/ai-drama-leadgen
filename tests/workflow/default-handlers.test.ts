@@ -8,6 +8,19 @@ import {
   createWorkflowResourceLimits,
 } from "../../src/workflow/default-handlers.js";
 import type { MediaProvider } from "../../src/media-providers/types.js";
+import type { TranscriptWord } from "../../src/alignment/types.js";
+import type { TtsProvider } from "../../src/tts/types.js";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+const exec = promisify(execFile);
+
+function createPlanSections() {
+  return [
+    { id: "hook", narration: "生成分镜", start: 0, end: 20 },
+    { id: "cta", narration: "锁定角色", start: 20, end: 40 },
+  ];
+}
 
 const base = {
   mode: "process" as const,
@@ -24,6 +37,83 @@ const base = {
 };
 
 describe("default workflow handlers", () => {
+  it("uses one TTS provider per video and repairs only a failed narration section", async () => {
+    const config = taskConfigSchema.parse({
+      ...base,
+      mode: "leadgen",
+      targetDurationSeconds: 40,
+      edgeRatio: 0,
+      mimoRatio: 1,
+    });
+    const calls: string[] = [];
+    let mimoCalls = 0;
+    const makeProvider = (id: "edge" | "mimo"): TtsProvider => ({
+      id,
+      async isAvailable() {
+        return true;
+      },
+      async synthesize(request) {
+        calls.push(`${id}:${request.segment.id}`);
+        if (id === "mimo" && ++mimoCalls === 2) throw new Error("mimo segment failure");
+        await exec("ffmpeg", [
+          "-y",
+          "-f",
+          "lavfi",
+          "-i",
+          "sine=frequency=440:duration=19",
+          "-ar",
+          "48000",
+          "-ac",
+          "1",
+          request.outputPath,
+        ]);
+      },
+    });
+    let transcriptions = 0;
+    const handlers = createDefaultHandlers(config, {
+      providers: [],
+      discoveryPlugins: [],
+      ttsProviders: { edge: makeProvider("edge"), mimo: makeProvider("mimo") },
+      async transcribe(_audioPath): Promise<TranscriptWord[]> {
+        transcriptions += 1;
+        const plan = createPlanSections();
+        return plan.flatMap((section, sectionIndex) => {
+          const text = (
+            transcriptions === 1 && sectionIndex === 1 ? "错误内容" : section.narration
+          ).replace(/[\s，。！？、“”‘’：:；;,.!?…]/g, "");
+          return [...text].map((character, characterIndex) => ({
+            text: character,
+            start: section.start + characterIndex * 0.12,
+            end: section.start + characterIndex * 0.12 + 0.08,
+          }));
+        });
+      },
+    });
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "single-provider-alignment-"));
+    await mkdir(workspace, { recursive: true });
+    const sections = createPlanSections();
+    await writeFile(
+      path.join(workspace, "scene-plan.json"),
+      JSON.stringify({ duration: 40, sections }),
+    );
+    const context = { batchId: "b", jobId: "j", variant: 0, workspace };
+    await handlers.tts({ ...context, node: "tts" });
+    await handlers.alignment({ ...context, node: "alignment" });
+    const ttsReport = JSON.parse(await readFile(path.join(workspace, "tts-report.json"), "utf8"));
+    const alignment = JSON.parse(
+      await readFile(path.join(workspace, "alignment-report.json"), "utf8"),
+    );
+    expect(ttsReport.actual).toBe("edge");
+    expect(ttsReport.timeline.every((item: { actual: string }) => item.actual === "edge")).toBe(
+      true,
+    );
+    expect(alignment.repairs).toEqual([{ sectionIds: ["cta-sentence-01"], attempt: 1 }]);
+    expect(alignment.ttsProvider).toBe("edge");
+    expect(transcriptions).toBe(2);
+    expect(calls.filter((call) => call.startsWith("edge:"))).toHaveLength(sections.length + 1);
+    await expect(access(path.join(workspace, "aligned-narration.wav"))).resolves.toBeUndefined();
+  }, 60_000);
+
   it("enforces configured resource peaks across concurrent jobs", async () => {
     const config = taskConfigSchema.parse({
       ...base,
@@ -75,7 +165,17 @@ describe("default workflow handlers", () => {
 
   it("fails leadgen closed without a licensed media provider", async () => {
     const config = taskConfigSchema.parse({ ...base, mode: "leadgen", targetDurationSeconds: 40 });
-    const handlers = createDefaultHandlers(config, { discoveryPlugins: [] });
+    const handlers = createDefaultHandlers(config, {
+      discoveryPlugins: [],
+      agnes: {
+        async isAvailable() {
+          return false;
+        },
+        async generate() {
+          throw new Error("must not generate");
+        },
+      },
+    });
     const workspace = await mkdtemp(path.join(os.tmpdir(), "leadgen-handlers-"));
     await expect(
       handlers.discover({ batchId: "b", jobId: "j", variant: 0, workspace, node: "discover" }),

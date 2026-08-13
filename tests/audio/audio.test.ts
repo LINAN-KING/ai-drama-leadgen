@@ -44,6 +44,7 @@ describe("TTS and captions", () => {
     expect(report.coverage).toBe(0);
     expect(report.substitutionRate).toBe(1);
     expect(report.failures).toContain("source-coverage-below-98-percent");
+    expect(report.words.every((word) => !word.matched)).toBe(true);
   });
 
   it("does not count Chinese sentence punctuation as spoken content", () => {
@@ -62,7 +63,7 @@ describe("TTS and captions", () => {
   it("distributes multi-character Whisper tokens into non-overlapping word times", () => {
     const report = alignTranscript("生成分镜", [{ text: "生成分镜", start: 1, end: 1.8 }]);
     expect(report.passed).toBe(true);
-    expect(report.medianErrorMs).toBe(100);
+    expect(report.medianTimingResolutionMs).toBe(100);
     expect(report.words.map(({ start, end }) => [start, end])).toEqual([
       [1, 1.2],
       [1.2, 1.4],

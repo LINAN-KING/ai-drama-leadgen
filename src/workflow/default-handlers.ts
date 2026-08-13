@@ -6,7 +6,12 @@ import { writeJson } from "../config/files.js";
 import { createScriptPlan, type ScriptPlan } from "../script/plan.js";
 import { createProviderCatalog } from "../media-providers/catalog.js";
 import type { MediaProvider } from "../media-providers/types.js";
-import { createDiscoveryPlugins, type DiscoveryPlugin } from "../discovery/plugins.js";
+import {
+  createDiscoveryPlugins,
+  createDiscoveryReferenceReaders,
+  type DiscoveryPlugin,
+  type DiscoveryReferenceReader,
+} from "../discovery/plugins.js";
 import { AssetLibrary } from "../media-providers/library.js";
 import { analyzeMedia } from "../media-qa/analyze.js";
 import { analyzeFinalVideo } from "../media-qa/final.js";
@@ -16,6 +21,7 @@ import { runBinary } from "../ffmpeg/process.js";
 import { renderEdl } from "../ffmpeg/render.js";
 import { probeMedia } from "../media-qa/probe.js";
 import type { AgnesClient } from "../generation/agnes.js";
+import { AgnesApiClient } from "../generation/agnes-client.js";
 import {
   discoverLeadgenMedia,
   acquireLeadgenMedia,
@@ -25,11 +31,13 @@ import {
 import { EdgeProvider, MimoProvider } from "../tts/providers.js";
 import type { TtsProvider, TtsProviderId } from "../tts/types.js";
 import { allocateProviders } from "../tts/scheduler.js";
-import { synthesizeWithFallback } from "../tts/fallback.js";
-import { normalizeNarration } from "../tts/audio.js";
+import { synthesizeSingleProvider } from "../tts/single-provider.js";
+import { createNarrationSegments } from "../tts/narration-segments.js";
+import { synthesizeWithinWindow } from "../tts/windowed.js";
 import { placeNarrationSegments } from "../tts/timeline.js";
-import { transcribeWithWhisper } from "../alignment/whisper.js";
-import { alignTranscript } from "../alignment/match.js";
+import { transcribeSectionsWithWhisper, transcribeWithWhisper } from "../alignment/whisper.js";
+import type { alignTranscript } from "../alignment/match.js";
+import { alignWithSectionRepairs } from "../alignment/repair.js";
 import { buildCaptions, toSrt } from "../captions/build.js";
 import { toAss } from "../captions/ass.js";
 import { analyzeAudio } from "../audio-qa/analyze.js";
@@ -56,6 +64,7 @@ const HARD_LINK_FALLBACK_ERRORS = new Set(["EXDEV", "EPERM", "ENOTSUP", "EEXIST"
 export interface WorkflowDependencies {
   providers?: MediaProvider[];
   discoveryPlugins?: DiscoveryPlugin[];
+  discoveryReferenceReaders?: DiscoveryReferenceReader[];
   agnes?: AgnesClient;
   ttsProviders?: Record<TtsProviderId, TtsProvider>;
   transcribe?: typeof transcribeWithWhisper;
@@ -169,12 +178,14 @@ export function createDefaultHandlers(
 ): Record<WorkflowNodeId, NodeHandler> {
   const providers = dependencies.providers ?? createProviderCatalog();
   const discoveryPlugins = dependencies.discoveryPlugins ?? createDiscoveryPlugins();
+  const discoveryReferenceReaders =
+    dependencies.discoveryReferenceReaders ?? createDiscoveryReferenceReaders();
   const ttsProviders = dependencies.ttsProviders ?? {
     edge: new EdgeProvider(),
     mimo: new MimoProvider(),
   };
   const transcribe = dependencies.transcribe ?? transcribeWithWhisper;
-  const ttsFailures = new Map<TtsProviderId, number>();
+  const agnes = dependencies.agnes ?? new AgnesApiClient();
   const assetLibrary = new AssetLibrary(
     dependencies.assetLibraryRoot ?? path.join(packageRoot, ".asset-library"),
   );
@@ -198,8 +209,13 @@ export function createDefaultHandlers(
           );
           return { availability };
         }
-        const discovery = await discoverLeadgenMedia(config, providers, discoveryPlugins);
-        const agnesAvailable = dependencies.agnes ? await dependencies.agnes.isAvailable() : false;
+        const discovery = await discoverLeadgenMedia(
+          config,
+          providers,
+          discoveryPlugins,
+          discoveryReferenceReaders,
+        );
+        const agnesAvailable = await agnes.isAvailable();
         return { ...discovery, agnesAvailable };
       })().catch((error: unknown) => {
         discoveryPromise = null;
@@ -286,7 +302,7 @@ export function createDefaultHandlers(
         discovery,
         workspace,
         library: assetLibrary,
-        agnes: dependencies.agnes,
+        agnes,
         required: 8,
         resources: mediaResources,
       });
@@ -315,58 +331,35 @@ export function createDefaultHandlers(
       ]!;
       const segmentDirectory = file(workspace, "narration-segments");
       await mkdir(segmentDirectory, { recursive: true });
-      const timeline: Array<{
-        path: string;
-        start: number;
-        requested: TtsProviderId;
-        actual: TtsProviderId;
-      }> = [];
-      for (const [index, section] of plan.sections.entries()) {
-        const window = section.end - section.start;
-        let outcome!: Awaited<ReturnType<typeof synthesizeWithFallback>>;
-        let normalized = "";
-        let duration = Number.POSITIVE_INFINITY;
-        for (const [attempt, speed] of [1, 1.1].entries()) {
-          const raw = path.join(
-            segmentDirectory,
-            `${String(index).padStart(2, "0")}-attempt-${attempt + 1}-raw.wav`,
-          );
-          normalized = path.join(segmentDirectory, `${String(index).padStart(2, "0")}.wav`);
-          outcome = await synthesizeWithFallback(
-            requested,
-            ttsProviders,
-            {
-              segment: { id: section.id, text: section.narration, index },
-              outputPath: raw,
+      const segments = createNarrationSegments(plan.sections);
+      const outcome = await synthesizeSingleProvider({
+        requested,
+        providers: ttsProviders,
+        segments,
+        async synthesizeSegment(provider, segment) {
+          const sentence = segments[segment.index]!;
+          return (
+            await synthesizeWithinWindow({
+              provider,
+              segment,
+              outputDirectory: segmentDirectory,
+              outputStem: `${provider.id}-${String(segment.index).padStart(2, "0")}`,
               voiceStyle: config.voiceStyle,
-              speed,
-            },
-            ttsFailures,
-          );
-          await normalizeNarration(raw, normalized);
-          const probe = await runBinary("ffprobe", [
-            "-v",
-            "error",
-            "-show_entries",
-            "format=duration",
-            "-of",
-            "default=nw=1:nk=1",
-            normalized,
-          ]);
-          duration = Number(probe.stdout.trim());
-          if (Number.isFinite(duration) && duration <= window + 0.05) break;
-        }
-        if (!Number.isFinite(duration) || duration > window + 0.05)
-          throw new Error(
-            `Narration segment ${section.id} is ${duration.toFixed(3)}s after two attempts but its scene window is ${window.toFixed(3)}s`,
-          );
-        timeline.push({
-          path: normalized,
-          start: section.start,
-          requested,
-          actual: outcome.actual,
-        });
-      }
+              windowSeconds: sentence.end - sentence.start,
+            })
+          ).path;
+        },
+      });
+      const timeline = segments.map((segment, index) => ({
+        id: segment.id,
+        parentSectionId: segment.parentSectionId,
+        narration: segment.narration,
+        path: outcome.outputs[index]!,
+        start: segment.start,
+        end: segment.end,
+        requested,
+        actual: outcome.actual,
+      }));
       const narration = file(workspace, "narration.wav");
       await placeNarrationSegments(timeline, config.targetDurationSeconds, narration);
       const report = await analyzeAudio(narration, -16, 2);
@@ -375,7 +368,13 @@ export function createDefaultHandlers(
       return {
         outputFiles: [
           narration,
-          await writeJson(file(workspace, "tts-report.json"), { requested, timeline, qa: report }),
+          await writeJson(file(workspace, "tts-report.json"), {
+            requested,
+            actual: outcome.actual,
+            failures: outcome.failures,
+            timeline,
+            qa: report,
+          }),
         ],
       };
     },
@@ -386,13 +385,61 @@ export function createDefaultHandlers(
             await writeJson(file(workspace, "alignment-report.json"), { applicable: false }),
           ],
         };
-      const plan = await readJson<ScriptPlan>(file(workspace, "scene-plan.json"));
-      const source = plan.sections.map((section) => section.narration).join("");
-      const words = await transcribe(file(workspace, "narration.wav"), file(workspace, "whisper"));
-      const report = alignTranscript(source, words);
-      if (!report.passed)
-        throw new Error(`Narration alignment failed: ${report.failures.join(", ")}`);
-      return { outputFiles: [await writeJson(file(workspace, "alignment-report.json"), report)] };
+      const ttsReport = await readJson<{
+        actual: TtsProviderId;
+        timeline: Array<{
+          id: string;
+          parentSectionId: string;
+          narration: string;
+          path: string;
+          start: number;
+          end: number;
+        }>;
+      }>(file(workspace, "tts-report.json"));
+      const timeline = ttsReport.timeline.map((item) => ({ ...item }));
+      const alignedNarration = file(workspace, "aligned-narration.wav");
+      await copyFile(file(workspace, "narration.wav"), alignedNarration);
+      const result = await alignWithSectionRepairs({
+        sections: timeline,
+        initialAudioPath: alignedNarration,
+        transcribe: (audioPath, attempt) =>
+          dependencies.transcribe
+            ? transcribe(audioPath, path.join(workspace, "whisper", `attempt-${attempt}`))
+            : transcribeSectionsWithWhisper(
+                audioPath,
+                path.join(workspace, "whisper", `attempt-${attempt}`),
+                timeline,
+              ),
+        async repair(sectionIndexes, attempt) {
+          const provider = ttsProviders[ttsReport.actual];
+          if (!(await provider.isAvailable()))
+            throw new Error(`Selected TTS provider ${ttsReport.actual} became unavailable`);
+          for (const index of sectionIndexes) {
+            const segment = timeline[index]!;
+            const repaired = await synthesizeWithinWindow({
+              provider,
+              segment: { id: segment.id, text: segment.narration, index },
+              outputDirectory: file(workspace, "narration-segments"),
+              outputStem: `repair-${attempt}-${String(index).padStart(2, "0")}`,
+              voiceStyle: config.voiceStyle,
+              windowSeconds: segment.end - segment.start,
+            });
+            timeline[index] = { ...segment, path: repaired.path };
+          }
+          await placeNarrationSegments(timeline, config.targetDurationSeconds, alignedNarration);
+          return alignedNarration;
+        },
+      });
+      const alignmentReport = await writeJson(file(workspace, "alignment-report.json"), {
+        ...result.report,
+        repairs: result.repairs,
+        ttsProvider: ttsReport.actual,
+      });
+      if (!result.report.passed)
+        throw new Error(`Narration alignment failed: ${result.report.failures.join(", ")}`);
+      return {
+        outputFiles: [alignedNarration, alignmentReport],
+      };
     },
     captions: async ({ workspace }) => {
       if (config.mode === "process")
@@ -450,7 +497,7 @@ export function createDefaultHandlers(
       }));
       const mix = file(workspace, "final-mix.wav");
       await mixNarrationMusicAndEffects(
-        file(workspace, "narration.wav"),
+        file(workspace, "aligned-narration.wav"),
         music,
         placements,
         config.targetDurationSeconds,
@@ -551,6 +598,9 @@ export function createDefaultHandlers(
       const manifest = await readJson<{ assets: FrozenMediaAsset[] }>(
         file(workspace, "media-manifest.json"),
       );
+      const ttsReport = await readJson<{ requested: TtsProviderId; actual: TtsProviderId }>(
+        file(workspace, "tts-report.json"),
+      );
       const captions = await readJson<{
         baselinePercent: number;
         cues: Array<{ text: string; start: number; end: number }>;
@@ -580,7 +630,7 @@ export function createDefaultHandlers(
       const generationReport = file(workspace, "generation-report.md");
       await writeFile(
         generationReport,
-        `# Generation Report\n\n- Mode: leadgen\n- QA: passed\n- Duration: ${report.durationSeconds}s\n- Licensed media: ${manifest.assets.length}\n- CTA: ${config.ctaText}\n`,
+        `# Generation Report\n\n- Mode: leadgen\n- QA: passed\n- Duration: ${report.durationSeconds}s\n- Licensed media: ${manifest.assets.length}\n- Media providers: ${[...new Set(manifest.assets.map((asset) => asset.provider))].join(", ")}\n- Requested TTS: ${ttsReport.requested}\n- Actual TTS: ${ttsReport.actual}\n- CTA: ${config.ctaText}\n- Publication review: required for third-party and generated-media rights\n`,
         "utf8",
       );
       const completeness = await verifyArtifacts(workspace, REQUIRED_LEADGEN_ARTIFACTS);

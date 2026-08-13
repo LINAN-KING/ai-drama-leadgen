@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   AgentReachDiscoveryPlugin,
   collectDiscoverySignals,
+  Crawl4AiReferenceReader,
+  enrichDiscoveryReferences,
   FirecrawlDiscoveryPlugin,
   SearxngDiscoveryPlugin,
   type DiscoveryPlugin,
@@ -149,5 +151,148 @@ describe("discovery plugins", () => {
       "exa",
     );
     await expect(agentReach.isAvailable()).resolves.toBe(true);
+  });
+
+  it("uses Crawl4AI only to enrich already-discovered HTTPS references", async () => {
+    const fetched: string[] = [];
+    const extracted: string[] = [];
+    const reader = new Crawl4AiReferenceReader(
+      async (url) => {
+        fetched.push(url.toString());
+        return "<main><h1>Celestial palace</h1><p>Eastern fantasy storyboard.</p></main>";
+      },
+      async (html) => {
+        extracted.push(html);
+        return "# Celestial palace\n\nEastern fantasy storyboard.";
+      },
+      async () => true,
+    );
+    const result = await enrichDiscoveryReferences(
+      {
+        keywords: [],
+        references: [{ source: "search", title: "Result", url: "https://example.test/story" }],
+        failures: [],
+        unavailable: [],
+      },
+      [reader],
+      2,
+    );
+    expect(fetched).toEqual(["https://example.test/story"]);
+    expect(extracted[0]).toContain("Celestial palace");
+    expect(result.references[0]?.snippet).toContain("Eastern fantasy storyboard");
+    expect(result.keywords).toContain("Celestial");
+  });
+
+  it("never sends unsafe references to Crawl4AI and isolates extraction failures", async () => {
+    const fetched: string[] = [];
+    const reader = new Crawl4AiReferenceReader(
+      async (url) => {
+        fetched.push(url.toString());
+        throw new Error("snapshot failed");
+      },
+      async () => "must not run",
+      async () => true,
+    );
+    const result = await enrichDiscoveryReferences(
+      {
+        keywords: [],
+        references: [
+          { source: "search", title: "Local", url: "https://127.0.0.1/private" },
+          { source: "search", title: "Public", url: "https://example.test/page" },
+        ],
+        failures: [],
+        unavailable: [],
+      },
+      [reader],
+      2,
+    );
+    expect(fetched).toEqual(["https://example.test/page"]);
+    expect(result.references).toHaveLength(2);
+    expect(result.failures).toContainEqual({
+      plugin: "crawl4ai",
+      error: "https://example.test/page: snapshot failed",
+    });
+  });
+
+  it("reports Crawl4AI as unavailable without dropping discovery results", async () => {
+    const reader = new Crawl4AiReferenceReader(
+      async () => "must not run",
+      async () => "must not run",
+      async () => false,
+    );
+    const result = await enrichDiscoveryReferences(
+      {
+        keywords: ["existing"],
+        references: [{ source: "search", title: "Result", url: "https://example.test/story" }],
+        failures: [],
+        unavailable: [],
+      },
+      [reader],
+    );
+    expect(result.keywords).toEqual(["existing"]);
+    expect(result.unavailable).toEqual(["crawl4ai"]);
+  });
+
+  it("does not probe reference readers when discovery returned no references", async () => {
+    let probes = 0;
+    const reader = new Crawl4AiReferenceReader(
+      async () => "must not run",
+      async () => "must not run",
+      async () => {
+        probes += 1;
+        return true;
+      },
+    );
+    await expect(
+      enrichDiscoveryReferences({ keywords: [], references: [], failures: [], unavailable: [] }, [
+        reader,
+      ]),
+    ).resolves.toEqual({ keywords: [], references: [], failures: [], unavailable: [] });
+    expect(probes).toBe(0);
+  });
+
+  it("isolates a Crawl4AI availability probe failure", async () => {
+    const reader = new Crawl4AiReferenceReader(
+      async () => "must not run",
+      async () => "must not run",
+      async () => {
+        throw new Error("python probe failed");
+      },
+    );
+    const result = await enrichDiscoveryReferences(
+      {
+        keywords: [],
+        references: [{ source: "search", title: "Result", url: "https://example.test/story" }],
+        failures: [],
+        unavailable: [],
+      },
+      [reader],
+    );
+    expect(result.failures).toEqual([{ plugin: "crawl4ai", error: "python probe failed" }]);
+  });
+
+  it("propagates cancellation while Crawl4AI is reading", async () => {
+    const controller = new AbortController();
+    const reader = new Crawl4AiReferenceReader(
+      async (_url, signal) =>
+        await new Promise((_resolve, reject) => {
+          signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+        }),
+      async () => "must not run",
+      async () => true,
+    );
+    const pending = enrichDiscoveryReferences(
+      {
+        keywords: [],
+        references: [{ source: "search", title: "Result", url: "https://example.test/story" }],
+        failures: [],
+        unavailable: [],
+      },
+      [reader],
+      1,
+      controller.signal,
+    );
+    controller.abort(new Error("caller stopped enrichment"));
+    await expect(pending).rejects.toThrow("caller stopped enrichment");
   });
 });
