@@ -59,8 +59,20 @@ function nodeInput(config: TaskConfig, variant: number, node: WorkflowNodeId): u
       return {
         ...common,
         topic: config.topic,
+        workflow: config.workflow,
+        platform: config.platform,
         aspectRatio: config.aspectRatio,
         seed: config.seed,
+        discoveryConfiguration: {
+          agentReachServer: process.env.AGENT_REACH_SERVER ?? "exa",
+          firecrawlUrl: process.env.FIRECRAWL_URL ?? null,
+          firecrawlConfigured: Boolean(process.env.FIRECRAWL_API_KEY),
+          searxngUrl: process.env.SEARXNG_URL ?? null,
+          pexelsConfigured: Boolean(process.env.PEXELS_API_KEY),
+          pixabayConfigured: Boolean(process.env.PIXABAY_API_KEY),
+          europeanaConfigured: Boolean(process.env.EUROPEANA_API_KEY),
+          smithsonianConfigured: Boolean(process.env.SMITHSONIAN_API_KEY),
+        },
       };
     case "tts":
       return {

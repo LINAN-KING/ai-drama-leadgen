@@ -6,6 +6,7 @@ import { writeJson } from "../config/files.js";
 import { createScriptPlan, type ScriptPlan } from "../script/plan.js";
 import { createProviderCatalog } from "../media-providers/catalog.js";
 import type { MediaProvider } from "../media-providers/types.js";
+import { createDiscoveryPlugins, type DiscoveryPlugin } from "../discovery/plugins.js";
 import { AssetLibrary } from "../media-providers/library.js";
 import { analyzeMedia } from "../media-qa/analyze.js";
 import { analyzeFinalVideo } from "../media-qa/final.js";
@@ -54,6 +55,7 @@ const packageRoot = fileURLToPath(new URL("../../", import.meta.url));
 const HARD_LINK_FALLBACK_ERRORS = new Set(["EXDEV", "EPERM", "ENOTSUP", "EEXIST"]);
 export interface WorkflowDependencies {
   providers?: MediaProvider[];
+  discoveryPlugins?: DiscoveryPlugin[];
   agnes?: AgnesClient;
   ttsProviders?: Record<TtsProviderId, TtsProvider>;
   transcribe?: typeof transcribeWithWhisper;
@@ -166,6 +168,7 @@ export function createDefaultHandlers(
   dependencies: WorkflowDependencies = {},
 ): Record<WorkflowNodeId, NodeHandler> {
   const providers = dependencies.providers ?? createProviderCatalog();
+  const discoveryPlugins = dependencies.discoveryPlugins ?? createDiscoveryPlugins();
   const ttsProviders = dependencies.ttsProviders ?? {
     edge: new EdgeProvider(),
     mimo: new MimoProvider(),
@@ -195,12 +198,8 @@ export function createDefaultHandlers(
           );
           return { availability };
         }
-        const discovery = await discoverLeadgenMedia(config, providers);
+        const discovery = await discoverLeadgenMedia(config, providers, discoveryPlugins);
         const agnesAvailable = dependencies.agnes ? await dependencies.agnes.isAvailable() : false;
-        if (!discovery.candidates.length && !agnesAvailable)
-          throw new Error(
-            `No licensed media provider or Agnes is available. Configure PEXELS_API_KEY, PIXABAY_API_KEY, or an Agnes adapter.${discovery.failures.length ? ` Provider failures: ${discovery.failures.map((item) => `${item.provider}:${item.error}`).join("; ")}` : ""}`,
-          );
         return { ...discovery, agnesAvailable };
       })().catch((error: unknown) => {
         discoveryPromise = null;
@@ -249,10 +248,24 @@ export function createDefaultHandlers(
       ],
     }),
     discover: async ({ workspace }) => {
+      const report = await sharedDiscovery();
+      const output = await writeJson(file(workspace, "discovery-report.json"), report);
+      if (
+        config.mode === "leadgen" &&
+        "candidates" in report &&
+        !report.candidates.length &&
+        !report.agnesAvailable
+      ) {
+        const diagnostics = [
+          ...report.failures.map((item) => `${item.provider}:${item.error}`),
+          ...report.signals.failures.map((item) => `${item.plugin}:${item.error}`),
+        ];
+        throw new Error(
+          `No licensed media provider or Agnes is available. Configure PEXELS_API_KEY, PIXABAY_API_KEY, or an Agnes adapter.${diagnostics.length ? ` Discovery failures: ${diagnostics.join("; ")}` : ""}`,
+        );
+      }
       return {
-        outputFiles: [
-          await writeJson(file(workspace, "discovery-report.json"), await sharedDiscovery()),
-        ],
+        outputFiles: [output],
       };
     },
     media: async ({ workspace, variant }) => {

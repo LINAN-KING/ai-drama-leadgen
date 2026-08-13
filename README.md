@@ -7,11 +7,14 @@
 - Six animated workbench templates in `9:16`, `16:9`, and `1:1`.
 - Isolated persistent jobs, adaptive concurrency, bounded replacement jobs, and node-level resume.
 - Pexels, Pixabay, Wikimedia Commons, Internet Archive, Europeana, and Smithsonian Open Access media adapters with license evidence and a cross-batch asset library.
+- Bounded Agent Reach (`mcporter`/Exa), Firecrawl, and SearXNG discovery plugins that add keywords and reference URLs to discovery reports.
 - Optional Agnes integration is an internal extension point; this package does not ship a concrete Agnes client, and `AGNES_API_KEY` alone never makes it available.
 - Edge and MiMo TTS, Whisper alignment, phrase or word-highlight captions, narration ducking, and audio/video QA.
 - Thin adapters for Codex, TRAE, Hermes, CodeBuddy, and WorkBuddy.
 
-Internet Archive and Wikimedia Commons work without credentials. Europeana and Smithsonian require their free API keys and accept only resource-level open rights with explicit dimensions. Agent Reach, Crawl4AI, Firecrawl, SearXNG, and the remaining provider names in `PROVIDER_CATALOG` are optional discovery or extension capabilities. V1 detects or catalogs them but does not claim a provider-specific runtime adapter. Catalog placeholders remain unavailable until an implementation is supplied; credentials alone never grant licensing or produce media.
+Internet Archive and Wikimedia Commons work without credentials. Europeana and Smithsonian require their free API keys and accept only resource-level open rights with explicit dimensions. Agent Reach uses `mcporter` and defaults to the configured `exa` MCP server; override the server name with `AGENT_REACH_SERVER`. Firecrawl requires both `FIRECRAWL_URL` and `FIRECRAWL_API_KEY`; SearXNG requires `SEARXNG_URL`. Service URLs must be public HTTPS endpoints.
+
+Discovery output is untrusted reference data only. Its keywords may expand a licensed provider query, but its URLs never become media candidates and never prove commercial rights. Crawl4AI is installation- and doctor-detected for optional page reading, but no unseeded search adapter is wired into this release. The remaining provider names in `PROVIDER_CATALOG` are explicit unavailable placeholders until a real API contract is implemented; credentials alone never grant licensing or produce media.
 
 Pexels and Pixabay currently record a dated, manually authored license summary and the official license URL. That summary is not an official page snapshot or legal approval. Before publishing a generated video, archive the current official license page and complete human license review for every included asset.
 

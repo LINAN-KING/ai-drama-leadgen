@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -75,11 +75,40 @@ describe("default workflow handlers", () => {
 
   it("fails leadgen closed without a licensed media provider", async () => {
     const config = taskConfigSchema.parse({ ...base, mode: "leadgen", targetDurationSeconds: 40 });
-    const handlers = createDefaultHandlers(config);
+    const handlers = createDefaultHandlers(config, { discoveryPlugins: [] });
     const workspace = await mkdtemp(path.join(os.tmpdir(), "leadgen-handlers-"));
     await expect(
       handlers.discover({ batchId: "b", jobId: "j", variant: 0, workspace, node: "discover" }),
     ).rejects.toThrow("No licensed media provider");
+    await expect(access(path.join(workspace, "discovery-report.json"))).resolves.toBeUndefined();
+  });
+
+  it("persists plugin diagnostics before failing closed", async () => {
+    const config = taskConfigSchema.parse({ ...base, mode: "leadgen", targetDurationSeconds: 40 });
+    const handlers = createDefaultHandlers(config, {
+      providers: [],
+      discoveryPlugins: [
+        {
+          id: "broken-discovery",
+          async isAvailable() {
+            return true;
+          },
+          async discover() {
+            throw new Error("service unavailable");
+          },
+        },
+      ],
+    });
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "leadgen-diagnostics-"));
+    await expect(
+      handlers.discover({ batchId: "b", jobId: "j", variant: 0, workspace, node: "discover" }),
+    ).rejects.toThrow("broken-discovery:service unavailable");
+    const report = JSON.parse(
+      await readFile(path.join(workspace, "discovery-report.json"), "utf8"),
+    );
+    expect(report.signals.failures).toEqual([
+      { plugin: "broken-discovery", error: "service unavailable" },
+    ]);
   });
 
   it("shares discovery across jobs while writing independent reports", async () => {
@@ -103,6 +132,7 @@ describe("default workflow handlers", () => {
     });
     const handlers = createDefaultHandlers(config, {
       providers: [provider],
+      discoveryPlugins: [],
       agnes: {
         async isAvailable() {
           return true;
@@ -154,6 +184,7 @@ describe("default workflow handlers", () => {
     });
     const handlers = createDefaultHandlers(config, {
       providers: [provider],
+      discoveryPlugins: [],
       agnes: {
         async isAvailable() {
           availabilityChecks += 1;

@@ -84,4 +84,57 @@ describe("provider HTTP recovery", () => {
     expect(secondHeaders.has("authorization")).toBe(false);
     expect(secondHeaders.has("cookie")).toBe(false);
   });
+
+  it("rejects an oversized declared JSON response before parsing", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response("{}", { headers: { "content-length": String(6 * 1024 * 1024) } }),
+        ),
+    );
+    await expect(fetchJson(new URL("https://example.test"), {})).rejects.toThrow(
+      "response exceeded",
+    );
+  });
+
+  it("stops reading an oversized streamed JSON response", async () => {
+    const chunk = new Uint8Array(1024 * 1024);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              for (let index = 0; index < 6; index += 1) controller.enqueue(chunk);
+              controller.close();
+            },
+          }),
+        ),
+      ),
+    );
+    await expect(fetchJson(new URL("https://example.test"), {})).rejects.toThrow(
+      "response exceeded",
+    );
+  });
+
+  it("bounds an oversized error response body", async () => {
+    const cancelled = vi.fn();
+    const response = new Response(
+      new ReadableStream({
+        pull(controller) {
+          controller.enqueue(new TextEncoder().encode("x".repeat(1_000_000)));
+        },
+        cancel: cancelled,
+      }),
+      { status: 400 },
+    );
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
+    await expect(fetchJson(new URL("https://example.test"), {})).rejects.toMatchObject({
+      status: 400,
+      message: expect.stringMatching(/x{500}$/),
+    });
+    expect(cancelled).toHaveBeenCalledOnce();
+  });
 });

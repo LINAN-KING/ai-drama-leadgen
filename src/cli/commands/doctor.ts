@@ -6,6 +6,11 @@ import { promisify } from "node:util";
 import { writeJson } from "../../config/files.js";
 import type { CapabilityResult } from "../../reporting/result.js";
 import { hasWindowsCredential } from "../../config/windows-credentials.js";
+import { inspectAgentReachServer } from "../../discovery/mcporter.js";
+import {
+  assertSafeNetworkUrl,
+  resolveSafePublicAddresses,
+} from "../../media-providers/safe-network.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -45,13 +50,6 @@ const COMMANDS = [
   { id: "python", label: "Python", command: "python", args: ["--version"], required: false },
   { id: "edge-tts", label: "Edge TTS", command: "edge-tts", args: ["--version"], required: false },
   { id: "whisper", label: "Whisper", command: "whisper", args: ["--help"], required: false },
-  {
-    id: "agent-reach",
-    label: "Agent Reach",
-    command: "agent-reach",
-    args: ["--help"],
-    required: false,
-  },
   {
     id: "crawl4ai",
     label: "Crawl4AI",
@@ -99,6 +97,68 @@ function inspectCredential(id: string, label: string, variables: string[]): Capa
       ? `Credential detected via ${variables.join(" or ")}`
       : `Set ${variables.join(" or ")} to enable`,
   };
+}
+
+function inspectRequiredConfiguration(
+  id: string,
+  label: string,
+  variables: string[],
+): CapabilityResult {
+  const missing = variables.filter((name) => !process.env[name]);
+  return {
+    id,
+    label,
+    status: missing.length ? "manual-action" : "available",
+    detail: missing.length
+      ? `Set ${missing.join(" and ")} to enable`
+      : `Configuration detected via ${variables.join(" and ")}`,
+  };
+}
+
+export async function inspectDiscoveryEndpoint(
+  id: string,
+  label: string,
+  variables: string[],
+  urlVariable: string,
+  resolve = resolveSafePublicAddresses,
+): Promise<CapabilityResult> {
+  const configured = inspectRequiredConfiguration(id, label, variables);
+  if (configured.status !== "available") return configured;
+  try {
+    const url = assertSafeNetworkUrl(process.env[urlVariable]!);
+    await resolve(url.hostname);
+    return {
+      ...configured,
+      detail: `${configured.detail}; endpoint DNS is public and service availability is checked on first request`,
+    };
+  } catch (error) {
+    return {
+      id,
+      label,
+      status: "manual-action",
+      detail: error instanceof Error ? error.message : `Invalid ${urlVariable}`,
+    };
+  }
+}
+
+async function inspectAgentReach(): Promise<CapabilityResult> {
+  const server = process.env.AGENT_REACH_SERVER ?? "exa";
+  try {
+    const available = await inspectAgentReachServer(server);
+    return {
+      id: "agent-reach",
+      label: "Agent Reach discovery (mcporter/exa)",
+      status: available ? "available" : "optional",
+      detail: available ? `MCP server ${server} is ready` : `MCP server ${server} is unavailable`,
+    };
+  } catch (error) {
+    return {
+      id: "agent-reach",
+      label: "Agent Reach discovery (mcporter/exa)",
+      status: "optional",
+      detail: error instanceof Error ? error.message : "mcporter is unavailable",
+    };
+  }
 }
 
 async function inspectMimoCredential(): Promise<CapabilityResult> {
@@ -165,6 +225,7 @@ async function detectChrome(): Promise<CapabilityResult> {
 
 export async function collectDoctorReport(cwd = process.cwd()): Promise<DoctorReport> {
   const capabilities = await Promise.all(COMMANDS.map(inspectCommand));
+  capabilities.push(await inspectAgentReach());
   capabilities.push(await detectChrome());
   capabilities.push(
     inspectCredential("free-media", "Free media providers", ["PIXABAY_API_KEY", "PEXELS_API_KEY"]),
@@ -179,7 +240,15 @@ export async function collectDoctorReport(cwd = process.cwd()): Promise<DoctorRe
   capabilities.push(await inspectMimoCredential());
   capabilities.push(inspectCredential("freesound", "Freesound effects", ["FREESOUND_API_KEY"]));
   capabilities.push(
-    inspectCredential("firecrawl", "Firecrawl", ["FIRECRAWL_API_KEY", "FIRECRAWL_URL"]),
+    await inspectDiscoveryEndpoint(
+      "firecrawl",
+      "Firecrawl discovery",
+      ["FIRECRAWL_API_KEY", "FIRECRAWL_URL"],
+      "FIRECRAWL_URL",
+    ),
+  );
+  capabilities.push(
+    await inspectDiscoveryEndpoint("searxng", "SearXNG discovery", ["SEARXNG_URL"], "SEARXNG_URL"),
   );
   let freeDiskBytes: number | null = null;
   try {

@@ -2,6 +2,11 @@ import { copyFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { TaskConfig } from "../config/schema.js";
 import { discoverCandidates, type DiscoveryResult } from "../discovery/discover.js";
+import {
+  collectDiscoverySignals,
+  type DiscoveryPlugin,
+  type DiscoverySignals,
+} from "../discovery/plugins.js";
 import type { AgnesClient, AgnesRequest } from "../generation/agnes.js";
 import { agnesCandidate } from "../generation/agnes.js";
 import { generateWithQa, GenerationBudget } from "../generation/retry.js";
@@ -24,6 +29,7 @@ export interface LeadgenDiscovery extends DiscoveryResult {
     limit: number;
     orientation: "portrait" | "landscape" | "square";
   };
+  signals: DiscoverySignals;
 }
 
 export interface FrozenMediaAsset extends AssetRecord {
@@ -50,14 +56,25 @@ function orientation(config: TaskConfig): "portrait" | "landscape" | "square" {
 export async function discoverLeadgenMedia(
   config: TaskConfig,
   providers: MediaProvider[],
+  plugins: DiscoveryPlugin[] = [],
 ): Promise<LeadgenDiscovery> {
+  const signals = await collectDiscoverySignals(
+    plugins,
+    `${config.topic} ${config.workflow} ${config.platform} AI drama trends`,
+    Math.min(config.concurrency.search, 3),
+  );
+  const expanded = signals.keywords.slice(0, 4).join(" ");
   const request = {
-    query: `${config.topic} cinematic fantasy AI`,
+    query: `${config.topic} cinematic fantasy AI${expanded ? ` ${expanded}` : ""}`.slice(0, 300),
     kind: "video" as const,
     limit: 80,
     orientation: orientation(config),
   };
-  return { request, ...(await discoverCandidates(providers, request, config.concurrency.search)) };
+  return {
+    request,
+    signals,
+    ...(await discoverCandidates(providers, request, config.concurrency.search)),
+  };
 }
 
 export async function acquireLeadgenMedia(options: {

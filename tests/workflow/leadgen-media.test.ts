@@ -5,12 +5,20 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { taskConfigSchema } from "../../src/config/schema.js";
+import type { DiscoverySignals } from "../../src/discovery/plugins.js";
+import type { DiscoveryPlugin } from "../../src/discovery/plugins.js";
 import type { AgnesClient } from "../../src/generation/agnes.js";
 import { AssetLibrary } from "../../src/media-providers/library.js";
 import type { MediaProvider } from "../../src/media-providers/types.js";
 import { acquireLeadgenMedia, discoverLeadgenMedia } from "../../src/workflow/leadgen-media.js";
 
 const exec = promisify(execFile);
+const noSignals: DiscoverySignals = {
+  keywords: [],
+  references: [],
+  failures: [],
+  unavailable: [],
+};
 const config = taskConfigSchema.parse({
   mode: "leadgen",
   topic: "东方奇幻漫剧",
@@ -65,6 +73,7 @@ describe("leadgen media acquisition", () => {
       config,
       variant: 0,
       discovery: {
+        signals: noSignals,
         request: { query: "x", kind: "video", limit: 80, orientation: "portrait" },
         candidates: [],
         failures: [],
@@ -135,6 +144,70 @@ describe("leadgen media acquisition", () => {
     expect(result.failures).toEqual([{ provider: "rate-limited", error: "HTTP 429 rate limit" }]);
   });
 
+  it("uses discovery keywords only to expand the provider query", async () => {
+    let providerQuery = "";
+    const provider: MediaProvider = {
+      id: "media",
+      tier: "free",
+      async isAvailable() {
+        return true;
+      },
+      async search(request) {
+        providerQuery = request.query;
+        return [];
+      },
+    };
+    const discoveryPlugin: DiscoveryPlugin = {
+      id: "trends",
+      async isAvailable() {
+        return true;
+      },
+      async discover() {
+        return {
+          keywords: ["reborn revenge", "cliffhanger"],
+          references: [
+            {
+              source: "trends",
+              title: "Reference only",
+              url: "https://example.test/trend",
+            },
+          ],
+        };
+      },
+    };
+    const result = await discoverLeadgenMedia(config, [provider], [discoveryPlugin]);
+    expect(providerQuery).toContain("reborn revenge cliffhanger");
+    expect(result.signals.references).toHaveLength(1);
+    expect(result.candidates).toEqual([]);
+  });
+
+  it("preserves the original provider query when all discovery plugins are unavailable", async () => {
+    let providerQuery = "";
+    const provider: MediaProvider = {
+      id: "media",
+      tier: "free",
+      async isAvailable() {
+        return true;
+      },
+      async search(request) {
+        providerQuery = request.query;
+        return [];
+      },
+    };
+    const unavailable: DiscoveryPlugin = {
+      id: "missing",
+      async isAvailable() {
+        return false;
+      },
+      async discover() {
+        throw new Error("must not run");
+      },
+    };
+    const result = await discoverLeadgenMedia(config, [provider], [unavailable]);
+    expect(providerQuery).toBe(`${config.topic} cinematic fantasy AI`);
+    expect(result.signals.unavailable).toEqual(["missing"]);
+  });
+
   it("uses Agnes after a provider candidate fails acquisition", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "provider-agnes-fallback-"));
     const generated = path.join(root, "generated.mp4");
@@ -195,6 +268,7 @@ describe("leadgen media acquisition", () => {
       config,
       variant: 0,
       discovery: {
+        signals: noSignals,
         request: { query: "x", kind: "video", limit: 40, orientation: "portrait" },
         candidates: [broken],
         failures: [],
@@ -217,6 +291,7 @@ describe("leadgen media acquisition", () => {
       config,
       variant: 0,
       discovery: {
+        signals: noSignals,
         request: { query: "x", kind: "video", limit: 40, orientation: "portrait" },
         candidates: [],
         failures: [],
@@ -300,6 +375,7 @@ describe("leadgen media acquisition", () => {
       config,
       variant: 0,
       discovery: {
+        signals: noSignals,
         request: { query: "x", kind: "video", limit: 40, orientation: "portrait" },
         candidates,
         failures: [],

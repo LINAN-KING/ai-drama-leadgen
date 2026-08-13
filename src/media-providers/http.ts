@@ -12,6 +12,70 @@ export class ProviderHttpError extends Error {
   }
 }
 
+class ProviderResponseSizeError extends Error {}
+
+const MAX_JSON_RESPONSE_BYTES = 5 * 1024 * 1024;
+
+async function readBoundedText(response: Response, maxBytes: number): Promise<string> {
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    while (size < maxBytes) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const remaining = maxBytes - size;
+      const chunk = value.byteLength > remaining ? value.subarray(0, remaining) : value;
+      chunks.push(chunk);
+      size += chunk.byteLength;
+      if (chunk.byteLength < value.byteLength) break;
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(bytes);
+}
+
+async function readBoundedJson<T>(response: Response): Promise<T> {
+  const declared = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > MAX_JSON_RESPONSE_BYTES)
+    throw new ProviderResponseSizeError(
+      `Provider response exceeded ${MAX_JSON_RESPONSE_BYTES} bytes`,
+    );
+  if (!response.body) throw new Error("Provider response returned an empty body");
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > MAX_JSON_RESPONSE_BYTES)
+        throw new ProviderResponseSizeError(
+          `Provider response exceeded ${MAX_JSON_RESPONSE_BYTES} bytes`,
+        );
+      chunks.push(value);
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return JSON.parse(new TextDecoder().decode(bytes)) as T;
+}
+
 export async function fetchJson<T>(
   url: URL,
   init: RequestInit,
@@ -52,12 +116,12 @@ export async function fetchJson<T>(
         }
         current = target;
       }
-      if (response.ok) return (await response.json()) as T;
+      if (response.ok) return await readBoundedJson<T>(response);
       const retryAfter = response.headers.get("retry-after");
       const error = new ProviderHttpError(
         response.status,
         retryAfter ? Number.parseInt(retryAfter, 10) : null,
-        `${response.status} ${response.statusText}: ${(await response.text()).slice(0, 500)}`,
+        `${response.status} ${response.statusText}: ${await readBoundedText(response, 500)}`,
       );
       if (response.status !== 429 && response.status < 500) throw error;
       lastError = error;
@@ -68,6 +132,7 @@ export async function fetchJson<T>(
       if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, delay));
       continue;
     } catch (error) {
+      if (error instanceof ProviderResponseSizeError) throw error;
       if (error instanceof ProviderHttpError && error.status !== 429 && error.status < 500)
         throw error;
       if (signal?.aborted) throw signal.reason ?? error;

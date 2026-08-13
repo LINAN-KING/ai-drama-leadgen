@@ -207,6 +207,63 @@ describe("persistent workflow", () => {
       expect(calls.get(id)).toBe(2);
   });
 
+  it.each(["workflow", "platform"] as const)(
+    "invalidates discovery when %s changes",
+    async (field) => {
+      const root = await mkdtemp(path.join(os.tmpdir(), `workflow-discovery-${field}-`));
+      const calls = new Map<string, number>();
+      const handlers = Object.fromEntries(
+        WORKFLOW_NODES.map((id) => [
+          id,
+          async ({ workspace }: Parameters<NodeHandler>[0]) => {
+            calls.set(id, (calls.get(id) ?? 0) + 1);
+            const output = path.join(workspace, `${id}.json`);
+            await writeFile(output, "{}");
+            return { outputFiles: [output] };
+          },
+        ]),
+      ) as Record<string, NodeHandler>;
+      await runBatch({ ...config, count: 1 }, root, handlers);
+      const store = new WorkflowStore(root);
+      await runBatch(
+        { ...config, count: 1, [field]: `${config[field]}-changed` },
+        root,
+        handlers,
+        await store.read(),
+      );
+      expect(calls.get("configure")).toBe(2);
+      expect(calls.get("script")).toBe(2);
+      expect(calls.get("discover")).toBe(2);
+    },
+  );
+
+  it("invalidates discovery when non-secret discovery configuration changes", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "workflow-discovery-config-"));
+    const calls = new Map<string, number>();
+    const handlers = Object.fromEntries(
+      WORKFLOW_NODES.map((id) => [
+        id,
+        async ({ workspace }: Parameters<NodeHandler>[0]) => {
+          calls.set(id, (calls.get(id) ?? 0) + 1);
+          const output = path.join(workspace, `${id}.json`);
+          await writeFile(output, "{}");
+          return { outputFiles: [output] };
+        },
+      ]),
+    ) as Record<string, NodeHandler>;
+    await runBatch({ ...config, count: 1 }, root, handlers);
+    const store = new WorkflowStore(root);
+    const original = process.env.AGENT_REACH_SERVER;
+    process.env.AGENT_REACH_SERVER = "alternate-exa";
+    try {
+      await runBatch({ ...config, count: 1 }, root, handlers, await store.read());
+    } finally {
+      if (original === undefined) delete process.env.AGENT_REACH_SERVER;
+      else process.env.AGENT_REACH_SERVER = original;
+    }
+    expect(calls.get("discover")).toBe(2);
+  });
+
   it("rejects persisted job IDs that could escape the jobs workspace", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "workflow-traversal-"));
     const state = createBatchState({ ...config, count: 1 }, "batch-safe");
