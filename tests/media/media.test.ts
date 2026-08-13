@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -76,5 +76,36 @@ describe("media licensing and persistence", () => {
     expect((await new AssetLibrary(path.join(root, "library")).usageMap()).get(licensed.id)).toBe(
       1,
     );
+  });
+
+  it("preserves concurrent mutations from independent library instances", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "asset-library-concurrent-"));
+    const source = path.join(root, "source.mp4");
+    await writeFile(source, "independent-library-content");
+    const libraryRoot = path.join(root, "library");
+    await Promise.all(
+      ["one", "two"].map((id) =>
+        new AssetLibrary(libraryRoot).importOriginal({ ...licensed, id }, source),
+      ),
+    );
+    const usage = await new AssetLibrary(libraryRoot).usageMap();
+    expect([...usage.keys()].sort()).toEqual(["one", "two"]);
+  });
+
+  it("reclaims an expired asset-library lease after PID reuse", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "asset-library-expired-"));
+    const libraryRoot = path.join(root, "library");
+    const lock = path.join(libraryRoot, ".index.lock");
+    const owner = path.join(lock, "owner.json");
+    const source = path.join(root, "source.mp4");
+    await mkdir(lock, { recursive: true });
+    await writeFile(
+      owner,
+      JSON.stringify({ pid: process.pid, acquiredAt: new Date(0).toISOString() }),
+    );
+    await utimes(owner, new Date(0), new Date(0));
+    await writeFile(source, "licensed original");
+    const record = await new AssetLibrary(libraryRoot).importAndRecordUse(licensed, source);
+    expect(record.useCount).toBe(1);
   });
 });

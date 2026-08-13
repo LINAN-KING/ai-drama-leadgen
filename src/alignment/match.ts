@@ -55,9 +55,14 @@ export function alignTranscript(sourceText: string, transcript: TranscriptWord[]
     source,
     flatTranscript.map((item) => item.text),
   );
-  const alignedSource = new Set(
+  const exactlyMatchedSource = new Set(
     pairs
-      .filter((pair) => pair.sourceIndex !== null && pair.transcriptIndex !== null)
+      .filter(
+        (pair) =>
+          pair.sourceIndex !== null &&
+          pair.transcriptIndex !== null &&
+          source[pair.sourceIndex] === flatTranscript[pair.transcriptIndex]?.text,
+      )
       .map((pair) => pair.sourceIndex!),
   );
   const substitutions = pairs.filter(
@@ -81,7 +86,7 @@ export function alignTranscript(sourceText: string, transcript: TranscriptWord[]
       },
     ];
   });
-  const coverage = source.length ? alignedSource.size / source.length : 0;
+  const coverage = source.length ? exactlyMatchedSource.size / source.length : 0;
   const errors = words
     .filter((word) => word.matched)
     .map((word) => (Math.max(0, word.end - word.start) * 1000) / 2)

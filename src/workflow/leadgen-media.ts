@@ -11,6 +11,12 @@ import type { MediaCandidate, MediaProvider } from "../media-providers/types.js"
 import { analyzeMedia, type MediaQaPolicy } from "../media-qa/analyze.js";
 import { rankCandidates, rejectAdjacentSimilarity } from "../media-qa/filter.js";
 
+export interface LeadgenResourceLimits {
+  download<T>(operation: () => Promise<T>): Promise<T>;
+  agnes<T>(operation: () => Promise<T>): Promise<T>;
+  qa<T>(operation: () => Promise<T>): Promise<T>;
+}
+
 export interface LeadgenDiscovery extends DiscoveryResult {
   request: {
     query: string;
@@ -62,6 +68,8 @@ export async function acquireLeadgenMedia(options: {
   library: AssetLibrary;
   agnes?: AgnesClient;
   required?: number;
+  resources?: LeadgenResourceLimits;
+  agnesAttemptTimeoutMs?: number;
 }): Promise<{ assets: FrozenMediaAsset[]; gaps: string[] }> {
   const required = options.required ?? 9;
   const usage = await options.library.usageMap();
@@ -74,26 +82,39 @@ export async function acquireLeadgenMedia(options: {
   const assets: FrozenMediaAsset[] = [];
   const downloads = path.join(options.workspace, "downloads");
   await mkdir(downloads, { recursive: true });
-  for (const candidate of ranked) {
-    if (assets.length >= required) break;
-    const extension = candidate.kind === "video" ? ".mp4" : ".jpg";
-    const localPath = path.join(
-      downloads,
-      `${candidate.id.replace(/[^a-z0-9_-]/gi, "-")}${extension}`,
+  let candidateIndex = 0;
+  while (assets.length < required && candidateIndex < ranked.length) {
+    const batch = ranked.slice(candidateIndex, candidateIndex + required - assets.length);
+    candidateIndex += batch.length;
+    const results = await Promise.all(
+      batch.map(async (candidate) => {
+        const extension = candidate.kind === "video" ? ".mp4" : ".jpg";
+        const localPath = path.join(
+          downloads,
+          `${candidate.id.replace(/[^a-z0-9_-]/gi, "-")}${extension}`,
+        );
+        try {
+          await (options.resources?.download ?? ((operation) => operation()))(async () => {
+            if (path.isAbsolute(candidate.downloadUrl))
+              await copyFile(candidate.downloadUrl, localPath);
+            else await downloadMedia(candidate.downloadUrl, localPath);
+          });
+          const report = await (options.resources?.qa ?? ((operation) => operation()))(() =>
+            analyzeMedia(localPath, LEADGEN_MEDIA_QA_POLICY),
+          );
+          if (!report.passed) return { gap: `${candidate.id}:${report.hardFailures.join(",")}` };
+          const record = await options.library.importAndRecordUse(candidate, localPath);
+          return { asset: { ...record, candidate } };
+        } catch (error) {
+          return {
+            gap: `${candidate.id}:${error instanceof Error ? error.message : String(error)}`,
+          };
+        }
+      }),
     );
-    try {
-      if (path.isAbsolute(candidate.downloadUrl)) await copyFile(candidate.downloadUrl, localPath);
-      else await downloadMedia(candidate.downloadUrl, localPath);
-      const report = await analyzeMedia(localPath, LEADGEN_MEDIA_QA_POLICY);
-      if (!report.passed) {
-        gaps.push(`${candidate.id}:${report.hardFailures.join(",")}`);
-        continue;
-      }
-      const record = await options.library.importOriginal(candidate, localPath);
-      await options.library.incrementUse(candidate.id);
-      assets.push({ ...record, candidate });
-    } catch (error) {
-      gaps.push(`${candidate.id}:${error instanceof Error ? error.message : String(error)}`);
+    for (const result of results) {
+      if (result.asset) assets.push(result.asset);
+      else if (result.gap) gaps.push(result.gap);
     }
   }
   if (assets.length < required && options.agnes) {
@@ -107,24 +128,34 @@ export async function acquireLeadgenMedia(options: {
         durationSeconds: 3,
         seed: options.config.seed + options.variant * 10_007 + index,
       };
-      const generated = await generateWithQa(options.agnes, request, budget, async (artifact) => {
-        const report = await analyzeMedia(artifact.localPath, {
-          ...LEADGEN_MEDIA_QA_POLICY,
-          maxFreezeRatio: 0.8,
-        });
-        return { passed: report.passed, reason: report.hardFailures.join(", ") };
-      });
+      const generated = await (options.resources?.agnes ?? ((operation) => operation()))(() =>
+        generateWithQa(
+          options.agnes!,
+          request,
+          budget,
+          async (artifact) => {
+            const report = await (options.resources?.qa ?? ((operation) => operation()))(() =>
+              analyzeMedia(artifact.localPath, {
+                ...LEADGEN_MEDIA_QA_POLICY,
+                maxFreezeRatio: 0.8,
+              }),
+            );
+            return { passed: report.passed, reason: report.hardFailures.join(", ") };
+          },
+          options.agnesAttemptTimeoutMs,
+        ),
+      );
       if (generated.status !== "accepted" || !generated.artifact) {
         gaps.push(`agnes-shot-${index + 1}:${generated.status}`);
+        if (generated.status === "unavailable") break;
         continue;
       }
       const candidate = agnesCandidate(generated.artifact, request);
       try {
-        const record = await options.library.importOriginal(
+        const record = await options.library.importAndRecordUse(
           candidate,
           generated.artifact.localPath,
         );
-        await options.library.incrementUse(candidate.id);
         assets.push({ ...record, candidate });
       } catch (error) {
         gaps.push(`${candidate.id}:${error instanceof Error ? error.message : String(error)}`);

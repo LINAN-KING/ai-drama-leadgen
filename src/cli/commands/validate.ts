@@ -1,16 +1,15 @@
 import { readTaskConfig } from "../../config/files.js";
 import { collectDoctorReport } from "./doctor.js";
+import { availableMediaProviders } from "../../media-providers/catalog.js";
 
 export async function runValidate(configPath: string): Promise<void> {
   const config = await readTaskConfig(configPath);
   const doctor = await collectDoctorReport();
   const requiredMissing = doctor.capabilities.filter((item) => item.status === "missing");
-  const providerAvailable = doctor.capabilities.some(
-    (item) => ["free-media", "agnes"].includes(item.id) && item.status === "available",
-  );
+  const availableProviders = await availableMediaProviders();
   const errors = requiredMissing.map((item) => `${item.label}: ${item.detail}`);
-  if (config.mode === "leadgen" && !providerAvailable) {
-    errors.push("leadgen requires at least one usable media source: a free provider or Agnes");
+  if (config.mode === "leadgen" && availableProviders.length === 0) {
+    errors.push("leadgen requires at least one implemented, usable licensed media provider");
   }
   const result = {
     ok: errors.length === 0,
@@ -19,6 +18,7 @@ export async function runValidate(configPath: string): Promise<void> {
       count: config.count,
       jobs: config.concurrency.jobs,
       targetDurationSeconds: config.targetDurationSeconds,
+      mediaProviders: availableProviders.map((provider) => provider.id),
     },
     errors,
     warnings: doctor.capabilities

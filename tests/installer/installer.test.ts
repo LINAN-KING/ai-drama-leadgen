@@ -23,6 +23,15 @@ describe("Windows installer", () => {
       const source = await readFile(path.resolve(`adapters/${agent}/SKILL.md`), "utf8");
       expect(source).toContain("drama-leadgen");
       expect(source).toContain("Do not generate media directly");
+      expect(source).toContain('"confirmed": true');
+      expect(source).toContain("validate --config");
+      expect(source).toContain("generate --config");
+      expect(source).toContain("--workspace");
+      expect(source).toContain("batch --config");
+      expect(source).toContain("resume --config");
+      expect(source).toContain("doctor --output");
+      expect(source).toContain("configure --input");
+      expect(source).toContain("run exactly one command");
     }
   });
 
@@ -51,6 +60,7 @@ describe("Windows installer", () => {
       };
       expect(installed).not.toContain("{{REPO_ROOT}}");
       expect(installed).toContain(path.resolve("SKILL.md"));
+      expect(installed).toContain("resume --config");
       expect(command.repository).toBe(path.resolve("."));
       expect(command.command).toContain("dist\\cli\\index.js");
     }

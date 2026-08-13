@@ -8,7 +8,8 @@ import type { TtsProvider, TtsSynthesisRequest } from "./types.js";
 export class MimoProvider implements TtsProvider {
   readonly id = "mimo" as const;
   constructor(
-    private readonly scriptPath = "C:\\Users\\LINAN\\.codex\\skills\\mimo-tts\\scripts\\synthesize.py",
+    private readonly scriptPath = process.env.MIMO_SCRIPT_PATH ??
+      path.join(os.homedir(), ".codex", "skills", "mimo-tts", "scripts", "synthesize.py"),
   ) {}
   async isAvailable(): Promise<boolean> {
     try {

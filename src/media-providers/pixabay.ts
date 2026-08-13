@@ -25,17 +25,18 @@ interface PixabayVideo {
   videos: Record<string, PixabayVideoFile>;
 }
 
-function licenseEvidence(): LicenseEvidence {
-  return {
-    name: "Pixabay Content License",
-    url: "https://pixabay.com/service/license-summary/",
-    commercialUse: true,
-    attributionRequired: false,
-    snapshotText:
-      "Royalty-free content may be used and adapted, subject to prohibited-use, trademark, endorsement, and standalone distribution restrictions.",
-    capturedAt: new Date().toISOString(),
-  };
-}
+const PIXABAY_LICENSE_EVIDENCE: LicenseEvidence = Object.freeze({
+  name: "Pixabay Content License",
+  url: "https://pixabay.com/service/license-summary/",
+  commercialUse: true,
+  attributionRequired: false,
+  snapshotText:
+    "Royalty-free content may be used and adapted, subject to prohibited-use, trademark, endorsement, and standalone distribution restrictions.",
+  capturedAt: "2026-08-13T00:00:00.000Z",
+  evidenceKind: "manual-summary",
+  reviewPolicy:
+    "Authored summary only, not an official page snapshot; archive and review the linked license before release.",
+});
 
 export class PixabayProvider implements MediaProvider {
   readonly id = "pixabay";
@@ -82,7 +83,7 @@ export class PixabayProvider implements MediaProvider {
         semanticScore: 0.6,
         compositionScore: 0.6,
         styleScore: 0.6,
-        license: licenseEvidence(),
+        license: PIXABAY_LICENSE_EVIDENCE,
       }));
     }
     const result = await fetchJson<{ hits: PixabayVideo[] }>(url, {}, signal);
@@ -109,7 +110,7 @@ export class PixabayProvider implements MediaProvider {
               semanticScore: 0.6,
               compositionScore: 0.6,
               styleScore: 0.6,
-              license: licenseEvidence(),
+              license: PIXABAY_LICENSE_EVIDENCE,
             },
           ]
         : [];

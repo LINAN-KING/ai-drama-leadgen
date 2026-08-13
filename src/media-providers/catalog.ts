@@ -49,17 +49,23 @@ export class UnconfiguredProvider implements MediaProvider {
   constructor(
     readonly id: string,
     readonly tier: ProviderTier,
-    private readonly credential?: string,
+    _credential?: string,
   ) {}
 
   async isAvailable(): Promise<boolean> {
-    return this.credential ? Boolean(process.env[this.credential]) : false;
+    return false;
   }
 
   async search(_request: SearchRequest, _signal?: AbortSignal): Promise<MediaCandidate[]> {
-    if (!(await this.isAvailable())) return [];
-    throw new Error(`${this.id} adapter requires provider-specific API configuration`);
+    return [];
   }
+}
+
+export async function availableMediaProviders(
+  providers: MediaProvider[] = createProviderCatalog(),
+): Promise<MediaProvider[]> {
+  const availability = await Promise.all(providers.map((provider) => provider.isAvailable()));
+  return providers.filter((_, index) => availability[index]);
 }
 
 export function createProviderCatalog(): MediaProvider[] {

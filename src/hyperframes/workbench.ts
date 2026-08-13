@@ -18,6 +18,14 @@ function escapeHtml(value: string): string {
     .replaceAll('"', "&quot;");
 }
 
+const WORKBENCH_TIMING = {
+  input: 0.2,
+  processing: 1.7,
+  result: 4.1,
+  focus: 6.2,
+  complete: 8.1,
+} as const;
+
 export async function loadWorkbenchContent(): Promise<Record<WorkbenchTemplate, WorkbenchContent>> {
   const file = new URL("../../content/workbench.json", import.meta.url);
   return JSON.parse(await readFile(file, "utf8")) as Record<WorkbenchTemplate, WorkbenchContent>;
@@ -28,23 +36,22 @@ export function createWorkbenchPlan(
   aspectRatio: AspectRatio,
   seed: number,
   content: WorkbenchContent,
+  duration = 10,
 ): WorkbenchPlan {
   const size = CANVAS_SIZES[aspectRatio];
+  const scale = duration / 10;
   return {
     id: `${template}-${aspectRatio.replace(":", "x")}`,
     template,
     aspectRatio,
     ...size,
-    duration: 10,
+    duration,
     seed,
     content,
-    stages: [
-      { id: "input", start: 0.2 },
-      { id: "processing", start: 1.7 },
-      { id: "result", start: 4.1 },
-      { id: "focus", start: 6.2 },
-      { id: "complete", start: 8.1 },
-    ],
+    stages: Object.entries(WORKBENCH_TIMING).map(([id, start]) => ({
+      id,
+      start: start * scale,
+    })) as WorkbenchPlan["stages"],
   };
 }
 
@@ -54,6 +61,10 @@ export function compileWorkbenchHtml(plan: WorkbenchPlan): string {
   ) as Record<keyof WorkbenchContent, string>;
   const portrait = plan.height > plan.width;
   const compact = plan.height === plan.width;
+  const scale = plan.duration / 10;
+  const time = (seconds: number) => Number((seconds * scale).toFixed(4));
+  const stage = (id: WorkbenchPlan["stages"][number]["id"]) =>
+    Number(plan.stages.find((item) => item.id === id)!.start.toFixed(4));
   return `<!doctype html>
 <html lang="zh-CN"><head><meta charset="UTF-8"><script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
 <style>
@@ -74,11 +85,11 @@ export function compileWorkbenchHtml(plan: WorkbenchPlan): string {
 <div class="ambient a" data-layout-ignore></div><div class="ambient b" data-layout-ignore></div><main class="shell"><header class="topbar"><div class="brand">${c.title}</div><div class="status">AI PIPELINE / ${plan.seed}</div></header><section class="workspace"><article class="editor"><div class="label">INPUT / ${plan.template.toUpperCase()}</div><div class="headline">${c.input}</div><div class="input">${c.processing}</div><div class="process"><span></span><span></span><span></span><span></span></div></article><article class="preview"><div class="label">GENERATED RESULT</div><div class="frame"><div class="result">${c.result}</div><div class="cursor"></div></div><div class="focus"><span>CAMERA FOCUS</span><strong>${c.focus}</strong></div><div class="done">✓ COMPLETE</div></article></section></main></div>
 <script>
 window.__timelines=window.__timelines||{};const tl=gsap.timeline({paused:true});
-tl.from('.topbar',{y:-28,opacity:0,duration:.55,ease:'expo.out'},.2).from('.editor',{x:-44,opacity:0,duration:.68,ease:'power3.out'},.34).from('.headline',{y:38,opacity:0,duration:.62,ease:'back.out(1.2)'},.62).from('.input',{opacity:0,duration:.5,ease:'sine.out'},1.15);
-tl.to('.process span:nth-child(1)',{backgroundColor:'#f05a47',duration:.25,ease:'power1.inOut'},1.7).to('.process span:nth-child(2)',{backgroundColor:'#f05a47',duration:.25,ease:'power2.inOut'},2.2).to('.process span:nth-child(3)',{backgroundColor:'#f05a47',duration:.25,ease:'power3.inOut'},2.7).to('.process span:nth-child(4)',{backgroundColor:'#f05a47',duration:.25,ease:'expo.inOut'},3.2);
-tl.from('.preview',{x:52,opacity:0,duration:.7,ease:'power4.out'},4.1).from('.frame',{scale:.94,opacity:0,duration:.62,ease:'back.out(1.15)'},4.35).from('.result',{y:32,opacity:0,duration:.52,ease:'circ.out'},4.72);
-tl.set('.cursor',{opacity:1},6.2).fromTo('.cursor',{x:0,y:0},{x:${portrait ? 300 : compact ? 220 : 260},y:${portrait ? 180 : 90},duration:1.15,ease:'power2.inOut'},6.2).from('.focus',{y:20,opacity:0,duration:.48,ease:'expo.out'},6.48);
-tl.fromTo('.done',{opacity:0,scale:.9},{opacity:1,scale:1,duration:.42,ease:'back.out(1.6)'},8.1).to('.ambient.a',{rotation:10,duration:9.4,ease:'none'},.3).to('.ambient.b',{rotation:-8,duration:9.2,ease:'none'},.4);
+tl.from('.topbar',{y:-28,opacity:0,duration:${time(0.55)},ease:'expo.out'},${stage("input")}).from('.editor',{x:-44,opacity:0,duration:${time(0.68)},ease:'power3.out'},${time(0.34)}).from('.headline',{y:38,opacity:0,duration:${time(0.62)},ease:'back.out(1.2)'},${time(0.62)}).from('.input',{opacity:0,duration:${time(0.5)},ease:'sine.out'},${time(1.15)});
+tl.to('.process span:nth-child(1)',{backgroundColor:'#f05a47',duration:${time(0.25)},ease:'power1.inOut'},${stage("processing")}).to('.process span:nth-child(2)',{backgroundColor:'#f05a47',duration:${time(0.25)},ease:'power2.inOut'},${time(2.2)}).to('.process span:nth-child(3)',{backgroundColor:'#f05a47',duration:${time(0.25)},ease:'power3.inOut'},${time(2.7)}).to('.process span:nth-child(4)',{backgroundColor:'#f05a47',duration:${time(0.25)},ease:'expo.inOut'},${time(3.2)});
+tl.from('.preview',{x:52,opacity:0,duration:${time(0.7)},ease:'power4.out'},${stage("result")}).from('.frame',{scale:.94,opacity:0,duration:${time(0.62)},ease:'back.out(1.15)'},${time(4.35)}).from('.result',{y:32,opacity:0,duration:${time(0.52)},ease:'circ.out'},${time(4.72)});
+tl.set('.cursor',{opacity:1},${stage("focus")}).fromTo('.cursor',{x:0,y:0},{x:${portrait ? 300 : compact ? 220 : 260},y:${portrait ? 180 : 90},duration:${time(1.15)},ease:'power2.inOut'},${stage("focus")}).from('.focus',{y:20,opacity:0,duration:${time(0.48)},ease:'expo.out'},${time(6.48)});
+tl.fromTo('.done',{opacity:0,scale:.9},{opacity:1,scale:1,duration:${time(0.42)},ease:'back.out(1.6)'},${stage("complete")}).to('.ambient.a',{rotation:10,duration:${time(9.4)},ease:'none'},${time(0.3)}).to('.ambient.b',{rotation:-8,duration:${time(9.2)},ease:'none'},${time(0.4)});
 window.__timelines['${plan.id}']=tl;
 </script></body></html>`;
 }

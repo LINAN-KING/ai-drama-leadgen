@@ -13,6 +13,7 @@
     "content",
     "templates",
     "adapters",
+    "examples",
     "installer",
     "SKILL.md",
     "ARCHITECTURE.md",
@@ -39,6 +40,8 @@
   "dependencies": {
     "commander": "^14.0.0",
     "hyperframes": "0.7.107",
+    "ipaddr.js": "^2.5.0",
+    "undici": "^7.29.0",
     "zod": "^4.0.0"
   },
   "devDependencies": {

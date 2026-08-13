@@ -29,6 +29,12 @@ const concurrencySchema = z.object({
   hyperframesWorkers: z.number().int().min(1).max(8).default(4),
 });
 
+const MIN_LEADGEN_CTA_WINDOW_SECONDS = (5 * 35) / 42;
+const MAX_CTA_CHARACTERS_PER_SECOND = 4.8;
+const MAX_LEADGEN_CTA_CHARACTERS = Math.floor(
+  MIN_LEADGEN_CTA_WINDOW_SECONDS * MAX_CTA_CHARACTERS_PER_SECOND,
+);
+
 export const taskConfigSchema = z
   .object({
     mode: modeSchema,
@@ -89,6 +95,13 @@ export const taskConfigSchema = z
         code: "custom",
         path: ["targetDurationSeconds"],
         message: "leadgen videos must be 35-45 seconds",
+      });
+    }
+    if (config.mode === "leadgen" && [...config.ctaText].length > MAX_LEADGEN_CTA_CHARACTERS) {
+      context.addIssue({
+        code: "custom",
+        path: ["ctaText"],
+        message: `leadgen CTA must be at most ${MAX_LEADGEN_CTA_CHARACTERS} characters to fit the final narration window`,
       });
     }
     if (config.audience === "custom" && !config.customAudience) {

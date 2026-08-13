@@ -36,4 +36,94 @@ describe("bounded Agnes generation", () => {
     for (let index = 0; index < 8; index += 1) budget.reserve("video");
     expect(() => budget.reserve("video")).toThrow("agnes-video-budget-exhausted");
   });
+
+  it("aborts and exhausts a client that never settles", async () => {
+    let aborted = 0;
+    const client: AgnesClient = {
+      async isAvailable() {
+        return true;
+      },
+      generate(_request, signal) {
+        return new Promise((_resolve, reject) =>
+          signal?.addEventListener(
+            "abort",
+            () => {
+              aborted += 1;
+              reject(new Error("aborted"));
+            },
+            { once: true },
+          ),
+        );
+      },
+    };
+    const result = await generateWithQa(
+      client,
+      { prompt: "x", kind: "video", aspectRatio: "9:16", seed: 1 },
+      new GenerationBudget(1, 2),
+      async () => ({ passed: true }),
+      10,
+    );
+    expect(result.status).toBe("exhausted");
+    expect(result.attempts).toHaveLength(2);
+    expect(result.attempts.every((attempt) => attempt.reason?.includes("timeout"))).toBe(true);
+    expect(aborted).toBe(2);
+  });
+
+  it("does not overlap retries when an adapter ignores abort", async () => {
+    let active = 0;
+    let peak = 0;
+    let calls = 0;
+    const client: AgnesClient = {
+      async isAvailable() {
+        return true;
+      },
+      async generate(request) {
+        calls += 1;
+        active += 1;
+        peak = Math.max(peak, active);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        active -= 1;
+        return {
+          id: String(calls),
+          localPath: "ignored.mp4",
+          width: 720,
+          height: 1280,
+          durationSeconds: request.durationSeconds,
+          model: "ignores-abort",
+        };
+      },
+    };
+    const result = await generateWithQa(
+      client,
+      { prompt: "x", kind: "video", aspectRatio: "9:16", seed: 1 },
+      new GenerationBudget(1, 2),
+      async () => ({ passed: false }),
+      5,
+    );
+    expect(result.status).toBe("exhausted");
+    expect(calls).toBe(2);
+    expect(peak).toBe(1);
+  });
+
+  it("returns after a bounded grace period when cancellation never settles", async () => {
+    const client: AgnesClient = {
+      async isAvailable() {
+        return true;
+      },
+      generate() {
+        return new Promise(() => undefined);
+      },
+    };
+    const startedAt = Date.now();
+    const result = await generateWithQa(
+      client,
+      { prompt: "x", kind: "video", aspectRatio: "9:16", seed: 1 },
+      new GenerationBudget(1, 1),
+      async () => ({ passed: true }),
+      5,
+      10,
+    );
+    expect(result.status).toBe("exhausted");
+    expect(Date.now() - startedAt).toBeLessThan(100);
+  });
 });

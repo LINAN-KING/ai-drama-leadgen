@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { copyFile, link, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { TaskConfig } from "../config/schema.js";
@@ -43,19 +43,42 @@ import { createLeadgenEdl } from "../editing/leadgen-edl.js";
 import type { EditDecisionList } from "../editing/edl.js";
 import type { NodeHandler, WorkflowNodeId } from "./types.js";
 import { cleanupJobIntermediates } from "./cleanup.js";
+import { Semaphore } from "../scheduler/semaphore.js";
+import {
+  createWorkbenchPlan,
+  loadWorkbenchContent,
+  writeWorkbenchProject,
+} from "../hyperframes/workbench.js";
 
 const packageRoot = fileURLToPath(new URL("../../", import.meta.url));
+const HARD_LINK_FALLBACK_ERRORS = new Set(["EXDEV", "EPERM", "ENOTSUP", "EEXIST"]);
 export interface WorkflowDependencies {
   providers?: MediaProvider[];
   agnes?: AgnesClient;
   ttsProviders?: Record<TtsProviderId, TtsProvider>;
   transcribe?: typeof transcribeWithWhisper;
   assetLibraryRoot?: string;
+  renderWorkbench?: typeof renderWorkbench;
 }
 
-async function json(filePath: string, value: unknown): Promise<string> {
-  return writeJson(filePath, value);
+export interface WorkflowResourceLimits {
+  download: Semaphore;
+  agnes: Semaphore;
+  qa: Semaphore;
+  render: Semaphore;
 }
+
+export function createWorkflowResourceLimits(
+  concurrency: TaskConfig["concurrency"],
+): WorkflowResourceLimits {
+  return {
+    download: new Semaphore(concurrency.download),
+    agnes: new Semaphore(concurrency.agnes),
+    qa: new Semaphore(concurrency.qa),
+    render: new Semaphore(concurrency.render),
+  };
+}
+
 async function readJson<T>(filePath: string): Promise<T> {
   return JSON.parse(await readFile(filePath, "utf8")) as T;
 }
@@ -64,8 +87,17 @@ function file(workspace: string, name: string) {
 }
 
 async function renderWorkbench(config: TaskConfig, workspace: string): Promise<[string, string]> {
-  const ratio = config.aspectRatio.replace(":", "x");
-  const project = path.join(packageRoot, "templates", "generated", `workflow-${ratio}`);
+  const content = await loadWorkbenchContent();
+  const project = await writeWorkbenchProject(
+    file(workspace, "hyperframes-project"),
+    createWorkbenchPlan(
+      "workflow",
+      config.aspectRatio,
+      config.seed,
+      content.workflow,
+      config.targetDurationSeconds,
+    ),
+  );
   const output = file(workspace, "process-video.mp4");
   const hyperframesCli = path.join(
     packageRoot,
@@ -94,7 +126,38 @@ async function renderWorkbench(config: TaskConfig, workspace: string): Promise<[
     600_000,
   );
   const preview = file(workspace, "preview.png");
-  await runBinary("ffmpeg", ["-y", "-ss", "8", "-i", output, "-frames:v", "1", preview]);
+  await runBinary("ffmpeg", [
+    "-y",
+    "-ss",
+    String(Math.max(0, config.targetDurationSeconds - 2)),
+    "-i",
+    output,
+    "-frames:v",
+    "1",
+    preview,
+  ]);
+  return [output, preview];
+}
+
+async function materializeWorkbench(
+  sourceWorkspace: string,
+  workspace: string,
+): Promise<[string, string]> {
+  const output = file(workspace, "process-video.mp4");
+  const preview = file(workspace, "preview.png");
+  await mkdir(workspace, { recursive: true });
+  const linkOrCopy = async (source: string, destination: string) => {
+    try {
+      await link(source, destination);
+    } catch (error) {
+      if (!HARD_LINK_FALLBACK_ERRORS.has((error as NodeJS.ErrnoException).code ?? "")) throw error;
+      await copyFile(source, destination);
+    }
+  };
+  await Promise.all([
+    linkOrCopy(file(sourceWorkspace, "process-video.mp4"), output),
+    linkOrCopy(file(sourceWorkspace, "preview.png"), preview),
+  ]);
   return [output, preview];
 }
 
@@ -109,37 +172,86 @@ export function createDefaultHandlers(
   };
   const transcribe = dependencies.transcribe ?? transcribeWithWhisper;
   const ttsFailures = new Map<TtsProviderId, number>();
+  const assetLibrary = new AssetLibrary(
+    dependencies.assetLibraryRoot ?? path.join(packageRoot, ".asset-library"),
+  );
+  const resources = createWorkflowResourceLimits(config.concurrency);
+  const workbenchRenderer = dependencies.renderWorkbench ?? renderWorkbench;
+  let discoveryPromise: Promise<
+    | { availability: Array<{ id: string; tier: MediaProvider["tier"]; available: boolean }> }
+    | (LeadgenDiscovery & { agnesAvailable: boolean })
+  > | null = null;
+  let workbenchPromise: Promise<string> | null = null;
+  const sharedDiscovery = () => {
+    if (!discoveryPromise) {
+      discoveryPromise = (async () => {
+        if (config.mode === "process") {
+          const availability = await Promise.all(
+            providers.map(async (provider) => ({
+              id: provider.id,
+              tier: provider.tier,
+              available: await provider.isAvailable(),
+            })),
+          );
+          return { availability };
+        }
+        const discovery = await discoverLeadgenMedia(config, providers);
+        const agnesAvailable = dependencies.agnes ? await dependencies.agnes.isAvailable() : false;
+        if (!discovery.candidates.length && !agnesAvailable)
+          throw new Error(
+            `No licensed media provider or Agnes is available. Configure PEXELS_API_KEY, PIXABAY_API_KEY, or an Agnes adapter.${discovery.failures.length ? ` Provider failures: ${discovery.failures.map((item) => `${item.provider}:${item.error}`).join("; ")}` : ""}`,
+          );
+        return { ...discovery, agnesAvailable };
+      })().catch((error: unknown) => {
+        discoveryPromise = null;
+        throw error;
+      });
+    }
+    return discoveryPromise;
+  };
+  const sharedWorkbench = async (
+    workspace: string,
+    allowRerender = true,
+  ): Promise<[string, string]> => {
+    const sharedWorkspace = file(path.dirname(workspace), ".shared-workbench");
+    if (!workbenchPromise) {
+      workbenchPromise = resources.render
+        .run(async () => {
+          await rm(sharedWorkspace, { recursive: true, force: true });
+          await workbenchRenderer(config, sharedWorkspace);
+          return sharedWorkspace;
+        })
+        .catch((error: unknown) => {
+          workbenchPromise = null;
+          throw error;
+        });
+    }
+    try {
+      return await materializeWorkbench(await workbenchPromise, workspace);
+    } catch (error) {
+      if (!allowRerender) throw error;
+      workbenchPromise = null;
+      return sharedWorkbench(workspace, false);
+    }
+  };
+  const mediaResources = {
+    download: <T>(operation: () => Promise<T>) => resources.download.run(operation),
+    agnes: <T>(operation: () => Promise<T>) => resources.agnes.run(operation),
+    qa: <T>(operation: () => Promise<T>) => resources.qa.run(operation),
+  };
   return {
     configure: async ({ workspace }) => ({
-      outputFiles: [await json(file(workspace, "config.json"), config)],
+      outputFiles: [await writeJson(file(workspace, "config.json"), config)],
     }),
     script: async ({ workspace, variant }) => ({
       outputFiles: [
-        await json(file(workspace, "scene-plan.json"), createScriptPlan(config, variant)),
+        await writeJson(file(workspace, "scene-plan.json"), createScriptPlan(config, variant)),
       ],
     }),
     discover: async ({ workspace }) => {
-      if (config.mode === "process") {
-        const availability = await Promise.all(
-          providers.map(async (provider) => ({
-            id: provider.id,
-            tier: provider.tier,
-            available: await provider.isAvailable(),
-          })),
-        );
-        return {
-          outputFiles: [await json(file(workspace, "discovery-report.json"), { availability })],
-        };
-      }
-      const discovery = await discoverLeadgenMedia(config, providers);
-      const agnesAvailable = dependencies.agnes ? await dependencies.agnes.isAvailable() : false;
-      if (!discovery.candidates.length && !agnesAvailable)
-        throw new Error(
-          `No licensed media provider or Agnes is available. Configure PEXELS_API_KEY, PIXABAY_API_KEY, or an Agnes adapter.${discovery.failures.length ? ` Provider failures: ${discovery.failures.map((item) => `${item.provider}:${item.error}`).join("; ")}` : ""}`,
-        );
       return {
         outputFiles: [
-          await json(file(workspace, "discovery-report.json"), { ...discovery, agnesAvailable }),
+          await writeJson(file(workspace, "discovery-report.json"), await sharedDiscovery()),
         ],
       };
     },
@@ -147,7 +259,7 @@ export function createDefaultHandlers(
       if (config.mode === "process")
         return {
           outputFiles: [
-            await json(file(workspace, "media-manifest.json"), {
+            await writeJson(file(workspace, "media-manifest.json"), {
               mode: config.mode,
               assets: [],
               note: "Process compositions contain generated UI only.",
@@ -155,23 +267,21 @@ export function createDefaultHandlers(
           ],
         };
       const discovery = await readJson<LeadgenDiscovery>(file(workspace, "discovery-report.json"));
-      const library = new AssetLibrary(
-        dependencies.assetLibraryRoot ?? path.join(packageRoot, ".asset-library"),
-      );
       const result = await acquireLeadgenMedia({
         config,
         variant,
         discovery,
         workspace,
-        library,
+        library: assetLibrary,
         agnes: dependencies.agnes,
         required: 8,
+        resources: mediaResources,
       });
       if (result.assets.length < 8)
         throw new Error(`Insufficient qualified licensed media: ${result.gaps.join("; ")}`);
       return {
         outputFiles: [
-          await json(file(workspace, "media-manifest.json"), {
+          await writeJson(file(workspace, "media-manifest.json"), {
             mode: "leadgen",
             assets: result.assets,
             gaps: result.gaps,
@@ -183,7 +293,7 @@ export function createDefaultHandlers(
       if (config.mode === "process")
         return {
           outputFiles: [
-            await json(file(workspace, "audio-quality-report.json"), { applicable: false }),
+            await writeJson(file(workspace, "audio-quality-report.json"), { applicable: false }),
           ],
         };
       const plan = await readJson<ScriptPlan>(file(workspace, "scene-plan.json"));
@@ -252,7 +362,7 @@ export function createDefaultHandlers(
       return {
         outputFiles: [
           narration,
-          await json(file(workspace, "tts-report.json"), { requested, timeline, qa: report }),
+          await writeJson(file(workspace, "tts-report.json"), { requested, timeline, qa: report }),
         ],
       };
     },
@@ -260,7 +370,7 @@ export function createDefaultHandlers(
       if (config.mode === "process")
         return {
           outputFiles: [
-            await json(file(workspace, "alignment-report.json"), { applicable: false }),
+            await writeJson(file(workspace, "alignment-report.json"), { applicable: false }),
           ],
         };
       const plan = await readJson<ScriptPlan>(file(workspace, "scene-plan.json"));
@@ -269,20 +379,20 @@ export function createDefaultHandlers(
       const report = alignTranscript(source, words);
       if (!report.passed)
         throw new Error(`Narration alignment failed: ${report.failures.join(", ")}`);
-      return { outputFiles: [await json(file(workspace, "alignment-report.json"), report)] };
+      return { outputFiles: [await writeJson(file(workspace, "alignment-report.json"), report)] };
     },
     captions: async ({ workspace }) => {
       if (config.mode === "process")
         return {
           outputFiles: [
-            await json(file(workspace, "captions.json"), { applicable: false, cues: [] }),
+            await writeJson(file(workspace, "captions.json"), { applicable: false, cues: [] }),
           ],
         };
       const alignment = await readJson<ReturnType<typeof alignTranscript>>(
         file(workspace, "alignment-report.json"),
       );
       const cues = buildCaptions(alignment.words, config.captions);
-      const captions = await json(file(workspace, "captions.json"), {
+      const captions = await writeJson(file(workspace, "captions.json"), {
         mode: config.captions,
         baselinePercent: 22,
         cues,
@@ -305,7 +415,9 @@ export function createDefaultHandlers(
     music: async ({ workspace, variant }) => {
       if (config.mode === "process")
         return {
-          outputFiles: [await json(file(workspace, "music-report.json"), { applicable: false })],
+          outputFiles: [
+            await writeJson(file(workspace, "music-report.json"), { applicable: false }),
+          ],
         };
       const music = file(workspace, "music.wav");
       await generateProceduralMusic(music, config.targetDurationSeconds, config.seed + variant);
@@ -333,7 +445,7 @@ export function createDefaultHandlers(
       );
       const qa = await analyzeAudio(mix, -14, 2);
       if (!qa.passed) throw new Error(`Final mix failed audio QA: ${qa.failures.join(", ")}`);
-      const report = await json(file(workspace, "audio-quality-report.json"), {
+      const report = await writeJson(file(workspace, "audio-quality-report.json"), {
         ...qa,
         music: PROCEDURAL_AUDIO_LICENSE,
         effects: effects.map((effectPath) => ({
@@ -346,9 +458,11 @@ export function createDefaultHandlers(
     edl: async ({ workspace }) => {
       if (config.mode === "process")
         return {
-          outputFiles: [await json(file(workspace, "edit-decision.json"), { applicable: false })],
+          outputFiles: [
+            await writeJson(file(workspace, "edit-decision.json"), { applicable: false }),
+          ],
         };
-      const [processVideo, preview] = await renderWorkbench(config, workspace);
+      const [processVideo, preview] = await sharedWorkbench(workspace);
       const plan = await readJson<ScriptPlan>(file(workspace, "scene-plan.json"));
       const manifest = await readJson<{ assets: FrozenMediaAsset[] }>(
         file(workspace, "media-manifest.json"),
@@ -365,7 +479,7 @@ export function createDefaultHandlers(
       );
       return {
         outputFiles: [
-          await json(file(workspace, "edit-decision.json"), edl),
+          await writeJson(file(workspace, "edit-decision.json"), edl),
           processVideo,
           preview,
         ],
@@ -373,30 +487,34 @@ export function createDefaultHandlers(
     },
     render: async ({ workspace }) => {
       if (config.mode === "process") {
-        const [output, preview] = await renderWorkbench(config, workspace);
+        const [output, preview] = await sharedWorkbench(workspace);
         return { outputFiles: [output, preview] };
       }
       const edl = await readJson<EditDecisionList>(file(workspace, "edit-decision.json"));
       const output = file(workspace, "final-leadgen-video.mp4");
-      await renderEdl(edl, {
-        workDirectory: file(workspace, "render-work"),
-        audioPath: file(workspace, "final-mix.wav"),
-        subtitlePath: file(workspace, "subtitle.ass"),
-        outputPath: output,
-      });
+      await resources.render.run(() =>
+        renderEdl(edl, {
+          workDirectory: file(workspace, "render-work"),
+          audioPath: file(workspace, "final-mix.wav"),
+          subtitlePath: file(workspace, "subtitle.ass"),
+          outputPath: output,
+        }),
+      );
       return { outputFiles: [output] };
     },
     qa: async ({ workspace }) => {
       if (config.mode === "process") {
-        const report = await analyzeMedia(file(workspace, "process-video.mp4"), {
-          minWidth: 720,
-          minHeight: 720,
-          minDurationSeconds: 9.8,
-          maxDurationSeconds: 10.2,
-          maxBlackRatio: 0.05,
-          maxFreezeRatio: 0.95,
-        });
-        const qualityPath = await json(file(workspace, "media-quality-report.json"), report);
+        const report = await resources.qa.run(() =>
+          analyzeMedia(file(workspace, "process-video.mp4"), {
+            minWidth: 720,
+            minHeight: 720,
+            minDurationSeconds: config.targetDurationSeconds - 0.2,
+            maxDurationSeconds: config.targetDurationSeconds + 0.2,
+            maxBlackRatio: 0.05,
+            maxFreezeRatio: 0.95,
+          }),
+        );
+        const qualityPath = await writeJson(file(workspace, "media-quality-report.json"), report);
         if (!report.passed)
           throw new Error(`Process video failed QA: ${report.hardFailures.join(", ")}`);
         const generationReport = file(workspace, "generation-report.md");
@@ -410,10 +528,12 @@ export function createDefaultHandlers(
           throw new Error(`Missing process artifacts: ${completeness.missing.join(", ")}`);
         return { outputFiles: [qualityPath, generationReport] };
       }
-      const finalQa = await analyzeFinalVideo(
-        file(workspace, "final-leadgen-video.mp4"),
-        config.aspectRatio,
-        config.targetDurationSeconds,
+      const finalQa = await resources.qa.run(() =>
+        analyzeFinalVideo(
+          file(workspace, "final-leadgen-video.mp4"),
+          config.aspectRatio,
+          config.targetDurationSeconds,
+        ),
       );
       const manifest = await readJson<{ assets: FrozenMediaAsset[] }>(
         file(workspace, "media-manifest.json"),
@@ -442,7 +562,7 @@ export function createDefaultHandlers(
         passed: failures.length === 0,
         failures: [...new Set(failures)],
       };
-      const qualityPath = await json(file(workspace, "media-quality-report.json"), report);
+      const qualityPath = await writeJson(file(workspace, "media-quality-report.json"), report);
       if (!report.passed) throw new Error(`Final video failed QA: ${report.failures.join(", ")}`);
       const generationReport = file(workspace, "generation-report.md");
       await writeFile(

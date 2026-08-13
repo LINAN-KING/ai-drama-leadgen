@@ -74,6 +74,10 @@ export class WikimediaProvider implements MediaProvider {
         "curl.exe",
         [
           "-fsSL",
+          "--proto",
+          "=https",
+          "--proto-redir",
+          "=https",
           "--connect-timeout",
           "15",
           "--max-time",

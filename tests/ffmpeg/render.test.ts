@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import { renderEdl } from "../../src/ffmpeg/render.js";
 import { probeMedia } from "../../src/media-qa/probe.js";
 import { analyzeFinalVideo } from "../../src/media-qa/final.js";
+import { toAss } from "../../src/captions/ass.js";
 
 const exec = promisify(execFile);
 
@@ -16,7 +17,7 @@ describe("real FFmpeg EDL render", () => {
     const first = path.join(root, "first.mp4");
     const second = path.join(root, "second.mp4");
     const audio = path.join(root, "audio.wav");
-    const subtitle = path.join(root, "subtitle.srt");
+    const subtitle = path.join(root, "subtitle.ass");
     const output = path.join(root, "final.mp4");
     await exec("ffmpeg", [
       "-y",
@@ -43,7 +44,24 @@ describe("real FFmpeg EDL render", () => {
       second,
     ]);
     await exec("ffmpeg", ["-y", "-f", "lavfi", "-i", "sine=f=440:d=2", audio]);
-    await writeFile(subtitle, "1\n00:00:00,000 --> 00:00:01,500\n测试字幕\n", "utf8");
+    await writeFile(
+      subtitle,
+      toAss(
+        [
+          {
+            id: "caption-001",
+            text: "测试字幕",
+            start: 0,
+            end: 1.5,
+            words: [],
+            mode: "phrase",
+            baselinePercent: 22,
+          },
+        ],
+        "1:1",
+      ),
+      "utf8",
+    );
     await renderEdl(
       {
         aspectRatio: "1:1",
@@ -86,5 +104,29 @@ describe("real FFmpeg EDL render", () => {
     expect(probe.durationSeconds).toBeLessThanOrEqual(2.1);
     const finalQa = await analyzeFinalVideo(output, "1:1", 2);
     expect(finalQa.passed).toBe(true);
+    const difference = path.join(root, "subtitle-difference.txt");
+    await exec("ffmpeg", [
+      "-y",
+      "-ss",
+      "0.5",
+      "-i",
+      output,
+      "-ss",
+      "0.5",
+      "-i",
+      path.join(root, "work", "silent-video.mp4"),
+      "-filter_complex",
+      "[0:v]crop=1080:180:0:752[a];[1:v]crop=1080:180:0:752[b];[a][b]blend=all_mode=difference,signalstats,metadata=print:file='" +
+        difference.replaceAll("\\", "/").replace(":", "\\:") +
+        "'",
+      "-frames:v",
+      "1",
+      "-f",
+      "null",
+      "-",
+    ]);
+    const metrics = await readFile(difference, "utf8");
+    const averageDifference = Number(metrics.match(/lavfi\.signalstats\.YAVG=([\d.]+)/)?.[1]);
+    expect(averageDifference).toBeGreaterThan(0.5);
   }, 60_000);
 });

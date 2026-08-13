@@ -8,6 +8,9 @@ export interface LicenseEvidence {
   attributionRequired: boolean;
   snapshotText: string;
   capturedAt: string;
+  evidenceKind?: "manual-summary" | "official-snapshot" | "provider-response";
+  snapshotSha256?: string;
+  reviewPolicy?: string;
 }
 
 export interface MediaCandidate {

@@ -1,8 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PexelsProvider } from "../../src/media-providers/pexels.js";
 import { PixabayProvider } from "../../src/media-providers/pixabay.js";
+import {
+  UnconfiguredProvider,
+  availableMediaProviders,
+  createProviderCatalog,
+} from "../../src/media-providers/catalog.js";
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+});
 
 describe("licensed provider adapters", () => {
   it("maps Pexels videos and chooses the highest-resolution MP4", async () => {
@@ -53,6 +61,9 @@ describe("licensed provider adapters", () => {
     expect(candidate?.downloadUrl).toBe("large");
     expect(candidate?.license?.commercialUse).toBe(true);
     expect(candidate?.author).toBe("A");
+    expect(candidate?.license?.capturedAt).toBe("2026-08-13T00:00:00.000Z");
+    expect(candidate?.license?.evidenceKind).toBe("manual-summary");
+    expect(candidate?.license?.snapshotSha256).toBeUndefined();
   });
 
   it("maps Pixabay images with source and license evidence", async () => {
@@ -86,6 +97,9 @@ describe("licensed provider adapters", () => {
     });
     expect(candidate).toMatchObject({ sourceUrl: "source", downloadUrl: "original", author: "B" });
     expect(candidate?.license?.snapshotText).toContain("Royalty-free");
+    expect(candidate?.license?.capturedAt).toBe("2026-08-13T00:00:00.000Z");
+    expect(candidate?.license?.evidenceKind).toBe("manual-summary");
+    expect(candidate?.license?.snapshotSha256).toBeUndefined();
   });
 
   it("does no network work when credentials are absent", async () => {
@@ -100,5 +114,24 @@ describe("licensed provider adapters", () => {
       }),
     ).toEqual([]);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps catalog placeholders unavailable even when their credential exists", async () => {
+    vi.stubEnv("FREEPIK_API_KEY", "present");
+    const placeholder = new UnconfiguredProvider("freepik", "paid", "FREEPIK_API_KEY");
+    expect(await placeholder.isAvailable()).toBe(false);
+    expect(
+      await placeholder.search({ query: "x", kind: "image", limit: 1, orientation: "square" }),
+    ).toEqual([]);
+    expect(await availableMediaProviders([placeholder])).toEqual([]);
+  });
+
+  it("accepts Wikimedia as the only credential-free concrete provider", async () => {
+    vi.stubEnv("PEXELS_API_KEY", "");
+    vi.stubEnv("PIXABAY_API_KEY", "");
+    vi.stubEnv("AGNES_API_KEY", "credential-without-client");
+    expect((await availableMediaProviders(createProviderCatalog())).map(({ id }) => id)).toEqual([
+      "wikimedia",
+    ]);
   });
 });

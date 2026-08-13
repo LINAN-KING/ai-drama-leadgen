@@ -39,6 +39,13 @@ describe("TTS and captions", () => {
     expect(report.failures).toContain("source-coverage-below-98-percent");
   });
 
+  it("does not count substitutions toward source coverage", () => {
+    const report = alignTranscript("一二三四", [{ text: "甲乙丙丁", start: 0, end: 0.8 }]);
+    expect(report.coverage).toBe(0);
+    expect(report.substitutionRate).toBe(1);
+    expect(report.failures).toContain("source-coverage-below-98-percent");
+  });
+
   it("does not count Chinese sentence punctuation as spoken content", () => {
     expect(
       alignTranscript(

@@ -1,4 +1,6 @@
-import { access, mkdir } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { createReadStream } from "node:fs";
+import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import type { TaskConfig } from "../config/schema.js";
@@ -10,13 +12,33 @@ import {
   type BatchState,
   type JobState,
   type NodeHandler,
+  type OutputIntegrity,
   type WorkflowNodeId,
+  parseBatchState,
 } from "./types.js";
 
 const now = () => new Date().toISOString();
 
+export const WORKFLOW_NODE_VERSIONS: Record<WorkflowNodeId, number> = {
+  configure: 1,
+  script: 1,
+  discover: 2,
+  media: 2,
+  tts: 2,
+  alignment: 2,
+  captions: 1,
+  music: 1,
+  edl: 2,
+  render: 2,
+  qa: 2,
+};
+
 function nodeInput(config: TaskConfig, variant: number, node: WorkflowNodeId): unknown {
-  const common = { mode: config.mode, variant };
+  const common = {
+    mode: config.mode,
+    variant,
+    implementationVersion: WORKFLOW_NODE_VERSIONS[node],
+  };
   switch (node) {
     case "configure":
       return config;
@@ -48,7 +70,7 @@ function nodeInput(config: TaskConfig, variant: number, node: WorkflowNodeId): u
         voiceStyle: config.voiceStyle,
       };
     case "alignment":
-      return { ...common, alignmentVersion: 1 };
+      return common;
     case "captions":
       return { ...common, captions: config.captions, aspectRatio: config.aspectRatio };
     case "music":
@@ -71,7 +93,6 @@ function nodeInput(config: TaskConfig, variant: number, node: WorkflowNodeId): u
         ...common,
         aspectRatio: config.aspectRatio,
         duration: config.targetDurationSeconds,
-        qaVersion: 1,
       };
   }
 }
@@ -109,20 +130,123 @@ export function createBatchState(config: TaskConfig, batchId: string): BatchStat
   };
 }
 
-async function outputsExist(files: string[]): Promise<boolean> {
-  if (!files.length) return false;
-  return (
-    await Promise.all(
-      files.map(async (file) => {
+async function fileIntegrity(file: string): Promise<OutputIntegrity> {
+  const metadata = await stat(file);
+  if (!metadata.isFile()) throw new Error(`Workflow output is not a file: ${file}`);
+  const hash = createHash("sha256");
+  for await (const chunk of createReadStream(file)) hash.update(chunk);
+  return { path: file, size: metadata.size, sha256: hash.digest("hex") };
+}
+
+async function outputsAreValid(node: JobState["nodes"][WorkflowNodeId]): Promise<boolean> {
+  if (
+    !node.outputFiles.length ||
+    !node.outputIntegrity ||
+    node.outputIntegrity.length !== node.outputFiles.length
+  )
+    return false;
+  try {
+    const actual = await Promise.all(node.outputFiles.map(fileIntegrity));
+    return actual.every((output, index) => {
+      const expected = node.outputIntegrity![index]!;
+      return (
+        expected.path === output.path &&
+        expected.size === output.size &&
+        expected.sha256 === output.sha256
+      );
+    });
+  } catch {
+    return false;
+  }
+}
+
+function jobWorkspace(workspace: string, job: JobState): string {
+  const jobsRoot = path.resolve(workspace, "jobs");
+  const resolved = path.resolve(jobsRoot, job.id);
+  if (path.dirname(resolved) !== jobsRoot) {
+    throw new Error(`Unsafe job ID would escape the jobs workspace: ${job.id}`);
+  }
+  return resolved;
+}
+
+function assertResumeCompatible(config: TaskConfig, state: BatchState): void {
+  if (state.requestedCount !== config.count) {
+    throw new Error(
+      `Cannot resume batch: requested count changed from ${state.requestedCount} to ${config.count}`,
+    );
+  }
+  if (state.userConcurrency !== config.concurrency.jobs) {
+    throw new Error(
+      `Cannot resume batch: job concurrency changed from ${state.userConcurrency} to ${config.concurrency.jobs}`,
+    );
+  }
+}
+
+async function acquireWorkspaceLock(workspace: string): Promise<() => Promise<void>> {
+  await mkdir(workspace, { recursive: true });
+  const lockPath = path.join(workspace, ".workflow.lock");
+  for (;;) {
+    try {
+      await mkdir(lockPath);
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      let ownerPid: number | undefined;
+      let heartbeatExpired = false;
+      try {
+        const ownerPath = path.join(lockPath, "owner.json");
+        ownerPid = (
+          JSON.parse(await readFile(ownerPath, "utf8")) as {
+            pid?: number;
+          }
+        ).pid;
+        heartbeatExpired = Date.now() - (await stat(ownerPath)).mtimeMs > 60_000;
+      } catch {
+        throw new Error(`Workflow workspace is locked by another process: ${workspace}`);
+      }
+      let ownerExited = false;
+      if (typeof ownerPid === "number") {
         try {
-          await access(file);
-          return true;
-        } catch {
-          return false;
+          process.kill(ownerPid, 0);
+        } catch (processError) {
+          ownerExited = (processError as NodeJS.ErrnoException).code === "ESRCH";
         }
-      }),
-    )
-  ).every(Boolean);
+      }
+      if (!ownerExited && !heartbeatExpired)
+        throw new Error(`Workflow workspace is locked by another process: ${workspace}`);
+      const stalePath = `${lockPath}.stale.${process.pid}.${randomUUID()}`;
+      try {
+        await rename(lockPath, stalePath);
+      } catch (renameError) {
+        if ((renameError as NodeJS.ErrnoException).code === "ENOENT") continue;
+        throw renameError;
+      }
+      await rm(stalePath, { recursive: true, force: true });
+    }
+  }
+  const ownerPath = path.join(lockPath, "owner.json");
+  try {
+    await writeFile(
+      ownerPath,
+      `${JSON.stringify({ pid: process.pid, acquiredAt: now() }, null, 2)}\n`,
+      "utf8",
+    );
+  } catch (error) {
+    await rm(lockPath, { recursive: true, force: true });
+    throw error;
+  }
+  const heartbeat = setInterval(() => {
+    void writeFile(
+      ownerPath,
+      `${JSON.stringify({ pid: process.pid, acquiredAt: now() })}\n`,
+      "utf8",
+    ).catch(() => undefined);
+  }, 10_000);
+  heartbeat.unref();
+  return async () => {
+    clearInterval(heartbeat);
+    await rm(lockPath, { recursive: true, force: true });
+  };
 }
 
 export async function runJob(
@@ -141,7 +265,7 @@ export async function runJob(
       !upstreamChanged &&
       node.status === "succeeded" &&
       node.inputHash === hash &&
-      (await outputsExist(node.outputFiles))
+      (await outputsAreValid(node))
     )
       continue;
     upstreamChanged = true;
@@ -154,7 +278,7 @@ export async function runJob(
     try {
       const handler = handlers[id];
       if (!handler) throw new Error(`Missing workflow handler: ${id}`);
-      const workspace = path.join(store.workspace, "jobs", job.id);
+      const workspace = jobWorkspace(store.workspace, job);
       await mkdir(workspace, { recursive: true });
       const result = await handler({
         batchId: state.id,
@@ -165,6 +289,7 @@ export async function runJob(
       });
       node.status = "succeeded";
       node.outputFiles = result.outputFiles;
+      node.outputIntegrity = await Promise.all(result.outputFiles.map(fileIntegrity));
       node.completedAt = now();
     } catch (error) {
       node.status = "failed";
@@ -188,59 +313,65 @@ export async function runBatch(
   handlers: Partial<Record<WorkflowNodeId, NodeHandler>>,
   existing?: BatchState,
 ): Promise<BatchState> {
-  const batchId = existing?.id ?? `batch-${config.seed}-${Date.now()}`;
-  const state = existing ?? createBatchState(config, batchId);
-  const store = new WorkflowStore(workspace);
-  const adaptive = new AdaptiveConcurrency(state.userConcurrency, state.currentConcurrency);
-  let nextVariant = state.jobs.length;
-  for (const job of state.jobs.filter((candidate) => candidate.status === "succeeded")) {
-    try {
-      await runJob(state, job, config, store, handlers);
-      adaptive.record("success");
-    } catch (error) {
-      adaptive.record(classifyFailure(error, process.memoryUsage().rss / os.totalmem()));
-    }
-    state.currentConcurrency = adaptive.current;
-  }
-  const queued = state.jobs.filter(
-    (candidate) => candidate.status === "failed" || candidate.status === "running",
-  );
-  const active = new Set<Promise<void>>();
-  const succeeded = () => state.jobs.filter((job) => job.status === "succeeded").length;
-
-  const launch = (job: JobState) => {
-    const task = runJob(state, job, config, store, handlers)
-      .then(() => {
+  const releaseLock = await acquireWorkspaceLock(workspace);
+  try {
+    const batchId = existing?.id ?? `batch-${config.seed}-${Date.now()}`;
+    const state = existing ? parseBatchState(existing) : createBatchState(config, batchId);
+    if (existing) assertResumeCompatible(config, state);
+    const store = new WorkflowStore(workspace);
+    const adaptive = new AdaptiveConcurrency(state.userConcurrency, state.currentConcurrency);
+    let nextVariant = state.jobs.length;
+    for (const job of state.jobs.filter((candidate) => candidate.status === "succeeded")) {
+      try {
+        await runJob(state, job, config, store, handlers);
         adaptive.record("success");
-      })
-      .catch((error: unknown) => {
+      } catch (error) {
         adaptive.record(classifyFailure(error, process.memoryUsage().rss / os.totalmem()));
-      })
-      .finally(() => {
-        state.currentConcurrency = adaptive.current;
-        active.delete(task);
-      });
-    active.add(task);
-  };
-
-  while (succeeded() < state.requestedCount) {
-    while (
-      active.size < adaptive.current &&
-      succeeded() + active.size < state.requestedCount &&
-      (queued.length > 0 || state.jobs.length < state.maxAttempts)
-    ) {
-      const job = queued.shift() ?? createJob(state.id, nextVariant++);
-      if (!state.jobs.includes(job)) {
-        state.jobs.push(job);
-        await store.write(state);
       }
-      launch(job);
+      state.currentConcurrency = adaptive.current;
     }
-    if (!active.size) break;
-    await Promise.race(active);
+    const queued = state.jobs.filter(
+      (candidate) => candidate.status === "failed" || candidate.status === "running",
+    );
+    const active = new Set<Promise<void>>();
+    const succeeded = () => state.jobs.filter((job) => job.status === "succeeded").length;
+
+    const launch = (job: JobState) => {
+      const task = runJob(state, job, config, store, handlers)
+        .then(() => {
+          adaptive.record("success");
+        })
+        .catch((error: unknown) => {
+          adaptive.record(classifyFailure(error, process.memoryUsage().rss / os.totalmem()));
+        })
+        .finally(() => {
+          state.currentConcurrency = adaptive.current;
+          active.delete(task);
+        });
+      active.add(task);
+    };
+
+    while (succeeded() < state.requestedCount) {
+      while (
+        active.size < adaptive.current &&
+        succeeded() + active.size < state.requestedCount &&
+        (queued.length > 0 || state.jobs.length < state.maxAttempts)
+      ) {
+        const job = queued.shift() ?? createJob(state.id, nextVariant++);
+        if (!state.jobs.includes(job)) {
+          state.jobs.push(job);
+          await store.write(state);
+        }
+        launch(job);
+      }
+      if (!active.size) break;
+      await Promise.race(active);
+    }
+    await Promise.all(active);
+    state.updatedAt = now();
+    await store.write(state);
+    return state;
+  } finally {
+    await releaseLock();
   }
-  await Promise.all(active);
-  state.updatedAt = now();
-  await store.write(state);
-  return state;
 }

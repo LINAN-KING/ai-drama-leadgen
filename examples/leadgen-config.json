@@ -1,0 +1,31 @@
+{
+  "mode": "leadgen",
+  "topic": "东方奇幻漫剧制作",
+  "workflow": "从主题提炼提示词，生成角色设定与故事分镜，再完成动态镜头和成片检查",
+  "platform": "TikTok Shop",
+  "aspectRatio": "9:16",
+  "targetDurationSeconds": 40,
+  "audience": "short-video-founders",
+  "ctaKind": "comment-keyword",
+  "ctaText": "评论漫剧，领取完整制作流程！",
+  "count": 3,
+  "concurrency": {
+    "jobs": 2,
+    "search": 6,
+    "download": 4,
+    "agnes": 2,
+    "qa": 3,
+    "render": 1,
+    "hyperframesWorkers": 4
+  },
+  "captions": "phrase",
+  "edgeRatio": 1,
+  "mimoRatio": 0,
+  "voiceStyle": "professional",
+  "theme": "cinematic-workbench",
+  "skin": "obsidian-coral",
+  "style": "technical-cinematic",
+  "motionIntensity": 0.7,
+  "seed": 20260813,
+  "confirmed": true
+}

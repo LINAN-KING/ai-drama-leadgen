@@ -42,4 +42,35 @@ describe("streaming media downloads", () => {
     await expect(downloadMedia("https://example.invalid/asset.mp4", output, 100)).rejects.toThrow();
     expect(await readdir(root)).toEqual([]);
   });
+
+  it.each([
+    "http://example.test/asset.mp4",
+    "file:///etc/passwd",
+    "https://localhost/asset.mp4",
+    "https://127.0.0.1/asset.mp4",
+    "https://10.0.0.1/asset.mp4",
+    "https://192.168.1.1/asset.mp4",
+    "https://172.16.0.1/asset.mp4",
+    "https://[::1]/asset.mp4",
+  ])("rejects unsafe download URL %s", async (url) => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(downloadMedia(url, path.join(os.tmpdir(), "unsafe.mp4"))).rejects.toThrow();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a fetch redirect that resolves to an unsafe host", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "redirect-download-"));
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(null, { status: 302, headers: { location: "https://127.0.0.1/private.mp4" } }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(
+      downloadMedia("https://example.test/asset.mp4", path.join(root, "asset.mp4")),
+    ).rejects.toThrow("Unsafe media request host");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(await readdir(root)).toEqual([]);
+  });
 });

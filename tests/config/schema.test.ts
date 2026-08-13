@@ -48,4 +48,13 @@ describe("taskConfigSchema", () => {
   it("requires explicit confirmation before side effects", () => {
     expect(taskConfigSchema.safeParse({ ...valid, confirmed: false }).success).toBe(false);
   });
+
+  it("rejects a leadgen CTA that cannot fit the final narration window", () => {
+    expect(() =>
+      taskConfigSchema.parse({
+        ...valid,
+        ctaText: "评论区输入漫剧两个字立即领取完整制作流程和全部配套资料",
+      }),
+    ).toThrow(/CTA must be at most 20 characters/);
+  });
 });

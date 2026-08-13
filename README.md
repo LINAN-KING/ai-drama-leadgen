@@ -7,11 +7,13 @@
 - Six animated workbench templates in `9:16`, `16:9`, and `1:1`.
 - Isolated persistent jobs, adaptive concurrency, bounded replacement jobs, and node-level resume.
 - Pexels, Pixabay, and Wikimedia Commons media adapters with license evidence and a cross-batch asset library.
-- Optional Agnes integration through the exported `AgnesClient` interface; the CLI fails explicitly when no concrete adapter or licensed provider is available.
+- Optional Agnes integration is an internal extension point; this package does not ship a concrete Agnes client, and `AGNES_API_KEY` alone never makes it available.
 - Edge and MiMo TTS, Whisper alignment, phrase or word-highlight captions, narration ducking, and audio/video QA.
 - Thin adapters for Codex, TRAE, Hermes, CodeBuddy, and WorkBuddy.
 
 Agent Reach, Crawl4AI, Firecrawl, SearXNG, and the remaining provider names in `PROVIDER_CATALOG` are optional discovery or extension capabilities. V1 detects or catalogs them but does not claim a provider-specific runtime adapter. Catalog placeholders remain unavailable until an implementation is supplied; credentials alone never grant licensing or produce media.
+
+Pexels and Pixabay currently record a dated, manually authored license summary and the official license URL. That summary is not an official page snapshot or legal approval. Before publishing a generated video, archive the current official license page and complete human license review for every included asset.
 
 ## Requirements
 
@@ -41,7 +43,7 @@ node .\dist\cli\index.js doctor --output doctor-report.json
 
 ## Generate
 
-Start from `tests/fixtures/process-config.json` or `tests/fixtures/leadgen-config.json`, then normalize and validate the confirmed configuration:
+Start from the published [`examples/process-config.json`](examples/process-config.json) or [`examples/leadgen-config.json`](examples/leadgen-config.json), then normalize and validate the confirmed configuration:
 
 ```powershell
 node .\dist\cli\index.js configure --input task.json --output config.json

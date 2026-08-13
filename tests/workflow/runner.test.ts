@@ -1,12 +1,12 @@
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { taskConfigSchema } from "../../src/config/schema.js";
-import { createBatchState, runBatch } from "../../src/workflow/runner.js";
+import { createBatchState, runBatch, WORKFLOW_NODE_VERSIONS } from "../../src/workflow/runner.js";
 import { AdaptiveConcurrency, classifyFailure } from "../../src/scheduler/adaptive.js";
 import { WorkflowStore } from "../../src/workflow/store.js";
-import type { NodeHandler } from "../../src/workflow/types.js";
+import { WORKFLOW_NODES, type NodeHandler } from "../../src/workflow/types.js";
 
 const config = taskConfigSchema.parse({
   mode: "process",
@@ -92,39 +92,43 @@ describe("persistent workflow", () => {
     expect(result.jobs[0]!.nodes.configure.error).toContain("Missing workflow handler");
   });
 
-  it.each([10, 50])("keeps %i successful jobs isolated", async (count) => {
-    const root = await mkdtemp(path.join(os.tmpdir(), `workflow-${count}-`));
-    const handlers = Object.fromEntries(
-      [
-        "configure",
-        "script",
-        "discover",
-        "media",
-        "tts",
-        "alignment",
-        "captions",
-        "music",
-        "edl",
-        "render",
-        "qa",
-      ].map((id) => [
-        id,
-        async ({ workspace, jobId }: Parameters<NodeHandler>[0]) => {
-          const output = path.join(workspace, `${id}.json`);
-          await writeFile(output, jobId);
-          return { outputFiles: [output] };
-        },
-      ]),
-    ) as Record<string, NodeHandler>;
-    const result = await runBatch({ ...config, count }, root, handlers);
-    expect(result.jobs).toHaveLength(count);
-    expect(new Set(result.jobs.map((job) => job.id))).toHaveLength(count);
-    await Promise.all(
-      result.jobs.map(async (job) => {
-        expect(await readFile(job.nodes.qa.outputFiles[0]!, "utf8")).toBe(job.id);
-      }),
-    );
-  });
+  it.each([10, 50])(
+    "keeps %i successful jobs isolated",
+    async (count) => {
+      const root = await mkdtemp(path.join(os.tmpdir(), `workflow-${count}-`));
+      const handlers = Object.fromEntries(
+        [
+          "configure",
+          "script",
+          "discover",
+          "media",
+          "tts",
+          "alignment",
+          "captions",
+          "music",
+          "edl",
+          "render",
+          "qa",
+        ].map((id) => [
+          id,
+          async ({ workspace, jobId }: Parameters<NodeHandler>[0]) => {
+            const output = path.join(workspace, `${id}.json`);
+            await writeFile(output, jobId);
+            return { outputFiles: [output] };
+          },
+        ]),
+      ) as Record<string, NodeHandler>;
+      const result = await runBatch({ ...config, count }, root, handlers);
+      expect(result.jobs).toHaveLength(count);
+      expect(new Set(result.jobs.map((job) => job.id))).toHaveLength(count);
+      await Promise.all(
+        result.jobs.map(async (job) => {
+          expect(await readFile(job.nodes.qa.outputFiles[0]!, "utf8")).toBe(job.id);
+        }),
+      );
+    },
+    10_000,
+  );
 
   it("serializes concurrent state snapshots without temporary-file collisions", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "workflow-store-"));
@@ -176,6 +180,226 @@ describe("persistent workflow", () => {
       expect(calls.get(id)).toBe(2);
   });
 
+  it("invalidates a changed node implementation and every downstream node", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "workflow-version-"));
+    const calls = new Map<string, number>();
+    const handlers = Object.fromEntries(
+      WORKFLOW_NODES.map((id) => [
+        id,
+        async ({ workspace }: Parameters<NodeHandler>[0]) => {
+          calls.set(id, (calls.get(id) ?? 0) + 1);
+          const output = path.join(workspace, `${id}.json`);
+          await writeFile(output, "{}");
+          return { outputFiles: [output] };
+        },
+      ]),
+    ) as Record<string, NodeHandler>;
+    await runBatch({ ...config, count: 1 }, root, handlers);
+    const store = new WorkflowStore(root);
+    WORKFLOW_NODE_VERSIONS.media += 1;
+    try {
+      await runBatch({ ...config, count: 1 }, root, handlers, await store.read());
+    } finally {
+      WORKFLOW_NODE_VERSIONS.media -= 1;
+    }
+    for (const id of ["configure", "script", "discover"]) expect(calls.get(id)).toBe(1);
+    for (const id of ["media", "tts", "alignment", "captions", "music", "edl", "render", "qa"])
+      expect(calls.get(id)).toBe(2);
+  });
+
+  it("rejects persisted job IDs that could escape the jobs workspace", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "workflow-traversal-"));
+    const state = createBatchState({ ...config, count: 1 }, "batch-safe");
+    state.jobs.push({
+      id: "../outside",
+      variant: 0,
+      status: "pending",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      nodes: Object.fromEntries(
+        [
+          "configure",
+          "script",
+          "discover",
+          "media",
+          "tts",
+          "alignment",
+          "captions",
+          "music",
+          "edl",
+          "render",
+          "qa",
+        ].map((id) => [id, { id, status: "pending", inputHash: "", attempts: 0, outputFiles: [] }]),
+      ) as unknown as (typeof state.jobs)[number]["nodes"],
+    });
+    await expect(runBatch({ ...config, count: 1 }, root, {}, state)).rejects.toThrow(
+      /job|batch state/i,
+    );
+  });
+
+  it("reruns a corrupt output and every downstream node", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "workflow-integrity-"));
+    const calls = new Map<string, number>();
+    const handlers = Object.fromEntries(
+      [
+        "configure",
+        "script",
+        "discover",
+        "media",
+        "tts",
+        "alignment",
+        "captions",
+        "music",
+        "edl",
+        "render",
+        "qa",
+      ].map((id) => [
+        id,
+        async ({ workspace }: Parameters<NodeHandler>[0]) => {
+          calls.set(id, (calls.get(id) ?? 0) + 1);
+          const output = path.join(workspace, `${id}.json`);
+          await writeFile(output, `${id}-${calls.get(id)}`);
+          return { outputFiles: [output] };
+        },
+      ]),
+    ) as Record<string, NodeHandler>;
+    const first = await runBatch({ ...config, count: 1 }, root, handlers);
+    await writeFile(first.jobs[0]!.nodes.script.outputFiles[0]!, "corrupt");
+
+    const store = new WorkflowStore(root);
+    await runBatch({ ...config, count: 1 }, root, handlers, await store.read());
+
+    expect(calls.get("configure")).toBe(1);
+    for (const id of [
+      "script",
+      "discover",
+      "media",
+      "tts",
+      "alignment",
+      "captions",
+      "music",
+      "edl",
+      "render",
+      "qa",
+    ])
+      expect(calls.get(id)).toBe(2);
+  });
+
+  it("rejects resume when count or user concurrency changed", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "workflow-config-"));
+    const state = createBatchState(
+      { ...config, count: 1, concurrency: { ...config.concurrency, jobs: 2 } },
+      "batch-config",
+    );
+
+    await expect(
+      runBatch(
+        { ...config, count: 2, concurrency: { ...config.concurrency, jobs: 2 } },
+        root,
+        {},
+        state,
+      ),
+    ).rejects.toThrow(/count changed/i);
+    await expect(
+      runBatch(
+        { ...config, count: 1, concurrency: { ...config.concurrency, jobs: 3 } },
+        root,
+        {},
+        state,
+      ),
+    ).rejects.toThrow(/concurrency changed/i);
+  });
+
+  it("holds an exclusive workspace lock and releases it in finally", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "workflow-lock-"));
+    let releaseConfigure!: () => void;
+    let configureStarted!: () => void;
+    const started = new Promise<void>((resolve) => (configureStarted = resolve));
+    const release = new Promise<void>((resolve) => (releaseConfigure = resolve));
+    const handlers = Object.fromEntries(
+      [
+        "configure",
+        "script",
+        "discover",
+        "media",
+        "tts",
+        "alignment",
+        "captions",
+        "music",
+        "edl",
+        "render",
+        "qa",
+      ].map((id) => [
+        id,
+        async ({ workspace }: Parameters<NodeHandler>[0]) => {
+          if (id === "configure") {
+            configureStarted();
+            await release;
+          }
+          const output = path.join(workspace, `${id}.json`);
+          await writeFile(output, "{}");
+          return { outputFiles: [output] };
+        },
+      ]),
+    ) as Record<string, NodeHandler>;
+
+    const first = runBatch({ ...config, count: 1 }, root, handlers);
+    await started;
+    await expect(runBatch({ ...config, count: 1 }, root, handlers)).rejects.toThrow(
+      /locked by another process/i,
+    );
+    releaseConfigure();
+    await first;
+    await expect(access(path.join(root, ".workflow.lock"))).rejects.toThrow();
+  });
+
+  it("reclaims a workflow lock whose owner process exited", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "workflow-stale-lock-"));
+    const lock = path.join(root, ".workflow.lock");
+    await mkdir(lock, { recursive: true });
+    await writeFile(
+      path.join(lock, "owner.json"),
+      JSON.stringify({ pid: 2_147_483_647, acquiredAt: new Date(0).toISOString() }),
+    );
+    const handlers = Object.fromEntries(
+      WORKFLOW_NODES.map((id) => [
+        id,
+        async ({ workspace }: Parameters<NodeHandler>[0]) => {
+          const output = path.join(workspace, `${id}.json`);
+          await writeFile(output, "{}");
+          return { outputFiles: [output] };
+        },
+      ]),
+    ) as Record<string, NodeHandler>;
+    const result = await runBatch({ ...config, count: 1 }, root, handlers);
+    expect(result.jobs[0]?.status).toBe("succeeded");
+    await expect(access(lock)).rejects.toThrow();
+  });
+
+  it("reclaims an expired workflow lease even when its PID was reused", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "workflow-expired-lock-"));
+    const lock = path.join(root, ".workflow.lock");
+    const owner = path.join(lock, "owner.json");
+    await mkdir(lock, { recursive: true });
+    await writeFile(
+      owner,
+      JSON.stringify({ pid: process.pid, acquiredAt: new Date(0).toISOString() }),
+    );
+    await utimes(owner, new Date(0), new Date(0));
+    const handlers = Object.fromEntries(
+      WORKFLOW_NODES.map((id) => [
+        id,
+        async ({ workspace }: Parameters<NodeHandler>[0]) => {
+          const output = path.join(workspace, `${id}.json`);
+          await writeFile(output, "{}");
+          return { outputFiles: [output] };
+        },
+      ]),
+    ) as Record<string, NodeHandler>;
+    const result = await runBatch({ ...config, count: 1 }, root, handlers);
+    expect(result.jobs[0]?.status).toBe("succeeded");
+  });
+
   it("reduces launches after a rate limit and later recovers", async () => {
     const adaptive = new AdaptiveConcurrency(4, 4, 2);
     expect(classifyFailure(new Error("HTTP 429 rate limit"))).toBe("rate-limit");
@@ -183,4 +407,46 @@ describe("persistent workflow", () => {
     expect(adaptive.record("success")).toBe(2);
     expect(adaptive.record("success")).toBe(3);
   });
+
+  it("limits the next runBatch launch wave after a rate limit", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "workflow-adaptive-launch-"));
+    let secondActive = 0;
+    let secondPeak = 0;
+    const handlers = Object.fromEntries(
+      [
+        "configure",
+        "script",
+        "discover",
+        "media",
+        "tts",
+        "alignment",
+        "captions",
+        "music",
+        "edl",
+        "render",
+        "qa",
+      ].map((id) => [
+        id,
+        async ({ workspace, variant }: Parameters<NodeHandler>[0]) => {
+          if (id === "configure") {
+            if (variant === 0) throw new Error("HTTP 429 rate limit");
+            if (variant <= 3) {
+              await new Promise((resolve) => setTimeout(resolve, 40));
+            } else {
+              secondActive += 1;
+              secondPeak = Math.max(secondPeak, secondActive);
+              await new Promise((resolve) => setTimeout(resolve, 80));
+              secondActive -= 1;
+            }
+          }
+          const output = path.join(workspace, `${id}.json`);
+          await writeFile(output, "{}");
+          return { outputFiles: [output] };
+        },
+      ]),
+    ) as Record<string, NodeHandler>;
+    const result = await runBatch({ ...config, count: 6 }, root, handlers);
+    expect(result.jobs.filter((job) => job.status === "succeeded")).toHaveLength(6);
+    expect(secondPeak).toBe(2);
+  }, 15_000);
 });

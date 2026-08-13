@@ -26,17 +26,18 @@ interface PexelsVideo {
   video_files: PexelsVideoFile[];
 }
 
-function licenseEvidence(): LicenseEvidence {
-  return {
-    name: "Pexels License",
-    url: "https://www.pexels.com/license/",
-    commercialUse: true,
-    attributionRequired: false,
-    snapshotText:
-      "Free to use and modify, including ads and marketing; no endorsement, unaltered resale, or stock redistribution.",
-    capturedAt: new Date().toISOString(),
-  };
-}
+const PEXELS_LICENSE_EVIDENCE: LicenseEvidence = Object.freeze({
+  name: "Pexels License",
+  url: "https://www.pexels.com/license/",
+  commercialUse: true,
+  attributionRequired: false,
+  snapshotText:
+    "Free to use and modify, including ads and marketing; no endorsement, unaltered resale, or stock redistribution.",
+  capturedAt: "2026-08-13T00:00:00.000Z",
+  evidenceKind: "manual-summary",
+  reviewPolicy:
+    "Authored summary only, not an official page snapshot; archive and review the linked license before release.",
+});
 
 function baseCandidate(id: number, request: SearchRequest) {
   return {
@@ -49,7 +50,7 @@ function baseCandidate(id: number, request: SearchRequest) {
     semanticScore: 0.6,
     compositionScore: 0.6,
     styleScore: 0.6,
-    license: licenseEvidence(),
+    license: PEXELS_LICENSE_EVIDENCE,
   };
 }
 

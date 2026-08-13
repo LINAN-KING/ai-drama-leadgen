@@ -49,4 +49,17 @@ describe("workbench compositions", () => {
     const plan = createWorkbenchPlan("prompt", "9:16", 99, content.prompt);
     expect(compileWorkbenchHtml(plan)).toBe(compileWorkbenchHtml(plan));
   });
+
+  it.each([6, 15])("uses the configured %s second process duration", async (duration) => {
+    const content = await loadWorkbenchContent();
+    const plan = createWorkbenchPlan("workflow", "9:16", 42, content.workflow, duration);
+    expect(plan.duration).toBe(duration);
+    const html = compileWorkbenchHtml(plan);
+    expect(html).toContain(`data-duration="${duration}"`);
+    expect(plan.stages.at(-1)).toMatchObject({ id: "complete", start: 8.1 * (duration / 10) });
+    expect(plan.stages.at(-1)!.start + 0.42 * (duration / 10)).toBeLessThan(duration);
+    const scaled = (seconds: number) => Number((seconds * (duration / 10)).toFixed(4));
+    expect(html).toContain(`duration:${scaled(0.42)}`);
+    expect(html).toContain(`},${scaled(8.1)})`);
+  });
 });

@@ -209,4 +209,111 @@ describe("leadgen media acquisition", () => {
     expect(result.assets[0]?.provider).toBe("agnes");
     expect(result.gaps.some((gap) => gap.startsWith("broken:"))).toBe(true);
   }, 60_000);
+
+  it("stops filling gaps when Agnes is unavailable", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "agnes-unavailable-"));
+    let checks = 0;
+    const result = await acquireLeadgenMedia({
+      config,
+      variant: 0,
+      discovery: {
+        request: { query: "x", kind: "video", limit: 40, orientation: "portrait" },
+        candidates: [],
+        failures: [],
+        unavailable: [],
+      },
+      workspace: path.join(root, "job"),
+      library: new AssetLibrary(path.join(root, "library")),
+      agnes: {
+        async isAvailable() {
+          checks += 1;
+          return false;
+        },
+        async generate() {
+          throw new Error("must-not-generate");
+        },
+      },
+      required: 8,
+    });
+    expect(checks).toBe(1);
+    expect(result.assets).toHaveLength(0);
+    expect(result.gaps).toContain("agnes-shot-1:unavailable");
+    expect(result.gaps).toContain("qualified-media:0/8");
+  });
+
+  it("uses resource concurrency within one job and preserves candidate order", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "candidate-concurrency-"));
+    const source = path.join(root, "source.mp4");
+    await exec("ffmpeg", [
+      "-y",
+      "-f",
+      "lavfi",
+      "-i",
+      "testsrc2=size=720x1280:rate=24:duration=1",
+      "-c:v",
+      "libx264",
+      "-pix_fmt",
+      "yuv420p",
+      source,
+    ]);
+    const candidates = Array.from({ length: 4 }, (_, index) => ({
+      id: `candidate-${index}`,
+      provider: "local",
+      tier: "free" as const,
+      kind: "video" as const,
+      previewUrl: "https://example.test/preview",
+      sourceUrl: "https://example.test/source",
+      downloadUrl: source,
+      author: "author",
+      width: 720,
+      height: 1280,
+      durationSeconds: 1,
+      watermarked: false,
+      motionScore: 0.9 - index * 0.01,
+      semanticScore: 0.9 - index * 0.01,
+      compositionScore: 0.9,
+      styleScore: 0.9,
+      license: {
+        name: "Commercial",
+        url: "https://example.test/license",
+        commercialUse: true,
+        attributionRequired: false,
+        snapshotText: "Commercial use permitted",
+        capturedAt: "2026-08-13T00:00:00.000Z",
+      },
+    }));
+    const peaks = { download: 0, qa: 0 };
+    const active = { download: 0, qa: 0 };
+    const resource =
+      (kind: keyof typeof active) =>
+      async <T>(operation: () => Promise<T>): Promise<T> => {
+        active[kind] += 1;
+        peaks[kind] = Math.max(peaks[kind], active[kind]);
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        try {
+          return await operation();
+        } finally {
+          active[kind] -= 1;
+        }
+      };
+    const result = await acquireLeadgenMedia({
+      config,
+      variant: 0,
+      discovery: {
+        request: { query: "x", kind: "video", limit: 40, orientation: "portrait" },
+        candidates,
+        failures: [],
+        unavailable: [],
+      },
+      workspace: path.join(root, "job"),
+      library: new AssetLibrary(path.join(root, "library")),
+      required: 4,
+      resources: { download: resource("download"), qa: resource("qa"), agnes: resource("qa") },
+    });
+    expect(peaks.download).toBeGreaterThan(1);
+    expect(peaks.qa).toBeGreaterThan(1);
+    expect(result.assets.map((asset) => asset.mediaId)).toEqual(
+      candidates.map((candidate) => candidate.id),
+    );
+  }, 60_000);
 });

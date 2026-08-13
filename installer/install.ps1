@@ -72,6 +72,10 @@ $adapterRoots = [ordered]@{
 
 $installedAdapters = @()
 if ($InstallAdapters) {
+    $cliPath = Join-Path $repoRoot 'dist\cli\index.js'
+    if (-not (Test-Path -LiteralPath $cliPath)) {
+        throw "Cannot install adapters before the CLI is built. Run: npm run build --prefix `"$repoRoot`""
+    }
     foreach ($entry in $adapterRoots.GetEnumerator()) {
         $source = Join-Path $repoRoot "adapters\$($entry.Key)\SKILL.md"
         if (Test-Path -LiteralPath $source) {
